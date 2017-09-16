@@ -1,24 +1,26 @@
-/* scanner for a toy Pascal-like language */
-
 %{
-/* need this for the call to atof() below */
 #pragma clang diagnostic ignored "-Wdeprecated-register"
 #include <math.h>
 #include <iostream>
-using namespace std;
 #include <stdio.h>
+#include "stgir.h"
+
+
+// Keep this at the end so it can see all the includes made here.
 #include "parser.generated.hpp"
+
+
+using namespace std;
 extern "C" int yylex();
 extern "C" int yyparse();
 
+int g_lexer_line_num = 1;
 %}
 
-DIGIT    [0-9]
-ID       [a-z][a-z0-9]*
 
 %%
 
-[ \t\n]          ;
+[ \t]          ;
 [0-9]+\.[0-9]+   { cout << "Found a floating-point number:" << yytext << endl;
                     yylval.ival= atoi(yytext);
                     return INT;
@@ -31,6 +33,7 @@ ID       [a-z][a-z0-9]*
                     yylval.sval= new std::string(yytext);
                     return STRING;
                  }
+\n             { ++g_lexer_line_num; return ENDL; }
 .                ;
 
 %%
