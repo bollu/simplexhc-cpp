@@ -19,12 +19,13 @@ int g_lexer_line_num = 1;
 
 
 %%
+"="            return ASSIGN; 
+"("            return OPENPAREN; 
+")"            return CLOSEPAREN;
+
 
 [ \t]          ;
-[0-9]+\.[0-9]+   { cout << "Found a floating-point number:" << yytext << endl;
-                    yylval.atom = new AtomIdent(yytext);
-                    return ATOMINT;
-                }
+
 [0-9]+           { cout << "Found an integer:" << yytext << endl;
                     yylval.atom= new AtomInt(atoi(yytext));
                     return ATOMINT;
@@ -34,7 +35,6 @@ int g_lexer_line_num = 1;
                     return ATOMSTRING;
                  }
 \n             { ++g_lexer_line_num; return ENDL; }
-.                ;
 
 %%
 

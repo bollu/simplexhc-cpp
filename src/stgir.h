@@ -1,6 +1,8 @@
 #pragma once
 #include <iostream>
 #include <llvm/ADT/SmallVector.h>
+#include <llvm/ADT/ArrayRef.h>
+
 #include <llvm/Support/Casting.h>
 
 namespace stg {
@@ -42,6 +44,9 @@ public:
   AtomIdent(std::string ident) : ident(ident), Atom(Atom::AK_Ident) {}
   void print(std::ostream &os) const;
 
+
+  Identifier getIdent() const { return ident; };
+
   static bool classof(const Atom *S) { return S->getKind() == Atom::AK_Ident; }
 };
 
@@ -49,6 +54,12 @@ public:
 class Expression {
 public:
   enum ExpressionKind { EK_Ap };
+  virtual void print(std::ostream &os) const = 0;
+
+  friend std::ostream &operator<<(std::ostream &os, const Expression &e) {
+    e.print(os);
+    return os;
+  }
 
 protected:
   Expression(ExpressionKind kind) : kind(kind){};
@@ -64,12 +75,25 @@ class ExpressionAp : public Expression {
 public:
   ExpressionAp(Identifier fn, std::initializer_list<Atom *> args)
       : fn(fn), args(args), Expression(Expression::EK_Ap){};
+
+  ExpressionAp(Identifier fn, ArrayRef<Atom *> argsref)
+      : fn(fn), Expression(Expression::EK_Ap){
+
+        for(Atom* arg : argsref)
+          args.push_back(arg);
+      };
+
+  void print(std::ostream &os) const;
 };
 
 // *** Binding ***
 class Binding {
   Identifier lhs;
-  Expression rhs;
+  Expression *rhs;
+public:
+  Binding(Identifier lhs, Expression *rhs) : lhs(lhs), rhs(rhs) {};
+  friend std::ostream &operator<<(std::ostream &os, const Binding &b);
+
 };
 
 // *** Program ***

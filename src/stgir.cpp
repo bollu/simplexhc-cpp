@@ -15,3 +15,19 @@ void AtomInt::print(std::ostream &os) const {
 void AtomIdent::print(std::ostream &os) const {
   os << "atom-" << ident;
 };
+
+
+std::ostream &stg::operator<<(std::ostream &os, const Binding &b) {
+    os << b.lhs << "=" << *b.rhs;
+    return os;
+}
+
+
+void ExpressionAp::print(std::ostream &os) const {
+  os << fn;
+  os << "(";
+  for (const Atom *a : args) {
+    os << *a << " ";
+  }
+  os << ")";
+};
