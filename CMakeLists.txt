@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.4.3)
 project(simplexhc CXX)
 
+# Colors when compiling with clang
+set(CMAKE_CXX_FLAGS "-fdiagnostics-color=always")
+
 # LLVM
 find_package(LLVM REQUIRED)
 llvm_map_components_to_libnames(LLVM_LIBS Core support)
@@ -25,15 +28,12 @@ add_executable(simplexhc
 target_link_libraries(simplexhc ${LLVM_LIBS} -lstdc++)
 set_target_properties(simplexhc PROPERTIES CXX_STANDARD 14)
 
-
-
-
 # CLANG FORMAT
 file(GLOB_RECURSE ALL_SOURCE_FILES *.cpp *.h)
 
 find_program(CLANG_FORMAT clang-format)
 add_custom_target(
-        clangformat
+        format
         COMMAND ${CLANG_FORMAT}
         -style=LLVM
         -i

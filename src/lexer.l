@@ -4,7 +4,7 @@
 #include <iostream>
 #include <stdio.h>
 #include "stgir.h"
-
+using namespace stg;
 
 // Keep this at the end so it can see all the includes made here.
 #include "parser.generated.hpp"
@@ -22,16 +22,16 @@ int g_lexer_line_num = 1;
 
 [ \t]          ;
 [0-9]+\.[0-9]+   { cout << "Found a floating-point number:" << yytext << endl;
-                    yylval.ival= atoi(yytext);
-                    return INT;
+                    yylval.atom = new AtomIdent(yytext);
+                    return ATOMINT;
                 }
 [0-9]+           { cout << "Found an integer:" << yytext << endl;
-                    yylval.ival= atoi(yytext);
-                    return INT;
+                    yylval.atom= new AtomInt(atoi(yytext));
+                    return ATOMINT;
                  }
 [a-zA-Z0-9]+     { cout << "Found a string: " << yytext << endl;
-                    yylval.sval= new std::string(yytext);
-                    return STRING;
+                    yylval.atom = new AtomIdent(yytext);
+                    return ATOMSTRING;
                  }
 \n             { ++g_lexer_line_num; return ENDL; }
 .                ;

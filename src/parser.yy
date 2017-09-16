@@ -18,25 +18,24 @@ void yyerror(const char *err) {
 
 
 %union{
-  int ival;
-  std::string *sval;
   stg::Atom *atom;
 }
 
 %start	stmt
 
-%token	<ival>	INT
-%token	<sval>	STRING
+%token	<atom>	ATOMINT
+%token	<atom>	ATOMSTRING
 %token END ENDL
 
 %%
 stmt:
-    stmt INT { cout << "Parser found int: " << $2 << endl; }
-    | stmt STRING { cout << "Parser found string: " << *$2 << endl; }
-    | INT { cout << "Parser found int (terminal): " << $1 << endl; }
-    | STRING { cout << "Parser found string (terminal): " << *$1 << endl; }
+    stmt ATOMINT { cout << "Parser found ATOMINT: " << *$2 << endl; }
+    | stmt ATOMSTRING { cout << "Parser found ATOMSTRING: " << *$2 << endl; }
+    | ATOMINT { cout << "Parser found int (terminal): " << *$1 << endl; }
+    | ATOMSTRING { cout << "Parser found string (terminal): " << *$1 << endl; }
     | stmt ENDL { cout << "newline" << endl; }
     ;
+
 
 %%
 

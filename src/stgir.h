@@ -11,9 +11,12 @@ using Identifier = std::string;
 // *** Atom ***
 class Atom {
 public:
-  enum AtomKind { AK_Int, AK_Identifier };
+  enum AtomKind { AK_Int, AK_Ident };
 
   AtomKind getKind() const { return kind; }
+  virtual void print(std::ostream &os) const = 0;
+
+  friend std::ostream &operator<<(std::ostream &os, const Atom &a);
 
 protected:
   Atom(AtomKind kind) : kind(kind){};
@@ -22,26 +25,24 @@ private:
   const AtomKind kind;
 };
 
+
 class AtomInt : public Atom {
   int val;
 
 public:
   AtomInt(int val) : val(val), Atom(Atom::AK_Int) {}
-
+  void print(std::ostream &os) const ;
   static bool classof(const Atom *S) { return S->getKind() == Atom::AK_Int; }
-
-  friend std::ostream &operator<<(std::ostream &os, const AtomInt &a);
 };
 
-class AtomIdentifier : public Atom {
+class AtomIdent : public Atom {
   Identifier ident;
 
 public:
-  AtomIdentifier(std::string ident) : ident(ident), Atom(Atom::AK_Identifier) {}
+  AtomIdent(std::string ident) : ident(ident), Atom(Atom::AK_Ident) {}
+  void print(std::ostream &os) const;
 
-  static bool classof(const Atom *S) {
-    return S->getKind() == Atom::AK_Identifier;
-  }
+  static bool classof(const Atom *S) { return S->getKind() == Atom::AK_Ident; }
 };
 
 // *** Expression ****
@@ -58,10 +59,10 @@ private:
 
 class ExpressionAp : public Expression {
   Identifier fn;
-  SmallVector<Atom, 2> args;
+  SmallVector<Atom *, 2> args;
 
 public:
-  ExpressionAp(Identifier fn, std::initializer_list<Atom> args)
+  ExpressionAp(Identifier fn, std::initializer_list<Atom *> args)
       : fn(fn), args(args), Expression(Expression::EK_Ap){};
 };
 
