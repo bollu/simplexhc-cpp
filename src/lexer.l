@@ -2,7 +2,15 @@
 
 %{
 /* need this for the call to atof() below */
+#pragma clang diagnostic ignored "-Wdeprecated-register"
 #include <math.h>
+#include <iostream>
+using namespace std;
+#include <stdio.h>
+#include "parser.generated.hpp"
+extern "C" int yylex();
+extern "C" int yyparse();
+
 %}
 
 DIGIT    [0-9]
@@ -10,29 +18,30 @@ ID       [a-z][a-z0-9]*
 
 %%
 
-{DIGIT}+    {
-            printf( "An integer: %s (%d)\n", yytext,
-                    atoi( yytext ) );
-            }
-
-{DIGIT}+"."{DIGIT}*        {
-            printf( "A float: %s (%g)\n", yytext,
-                    atof( yytext ) );
-            }
-
-if|then|begin|end|procedure|function        {
-            printf( "A keyword: %s\n", yytext );
-            }
-
-{ID}        printf( "An identifier: %s\n", yytext );
-
-"+"|"-"|"*"|"/"   printf( "An operator: %s\n", yytext );
-
-"{"[^}\n]*"}"     /* eat up one-line comments */
-
-[ \t\n]+          /* eat up whitespace */
-
-.           printf( "Unrecognized character: %s\n", yytext );
+[ \t\n]          ;
+[0-9]+\.[0-9]+   { cout << "Found a floating-point number:" << yytext << endl;
+                    yylval.ival= atoi(yytext);
+                    return INT;
+                }
+[0-9]+           { cout << "Found an integer:" << yytext << endl;
+                    yylval.ival= atoi(yytext);
+                    return INT;
+                 }
+[a-zA-Z0-9]+     { cout << "Found a string: " << yytext << endl;
+                    yylval.sval= new std::string(yytext);
+                    return STRING;
+                 }
+.                ;
 
 %%
 
+int yywrap(void) {
+    return 1;
+}
+
+int main(void) {
+    do {
+        yyparse();
+    } while (!feof(yyin));
+    return 0;
+}

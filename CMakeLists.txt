@@ -8,8 +8,8 @@ llvm_map_components_to_libnames(LLVM_LIBS Core support)
 # FLEX AND BISON
 find_package(BISON)
 find_package(FLEX)
-bison_target(Parser src/parser.yy ${CMAKE_CURRENT_SOURCE_DIR}/src/parser.generated.cpp)
-flex_target(Lexer src/lexer.l  ${CMAKE_CURRENT_SOURCE_DIR}/src/lexer.generated.cpp)
+bison_target(Parser src/parser.yy ${CMAKE_SOURCE_DIR}/src/parser.generated.cpp)
+flex_target(Lexer src/lexer.l  ${CMAKE_SOURCE_DIR}/src/lexer.generated.cpp COMPILE_FLAGS -d)
 add_flex_bison_dependency(Lexer Parser)
 
 
