@@ -22,6 +22,10 @@ int g_lexer_line_num = 1;
 "="            return ASSIGN; 
 "("            return OPENPAREN; 
 ")"            return CLOSEPAREN;
+"of"           return OF;
+"case"         return CASE;
+";"            return SEMICOLON;
+"->"            return THINARROW;
 
 
 [ \t]          ;
@@ -30,11 +34,17 @@ int g_lexer_line_num = 1;
                     yylval.atom= new AtomInt(atoi(yytext));
                     return ATOMINT;
                  }
-[a-zA-Z0-9]+     { cout << "Found a string: " << yytext << endl;
+[a-z][a-zA-Z0-9]*     { cout << "Found ident: " << yytext << endl;
                     yylval.atom = new AtomIdent(yytext);
                     return ATOMSTRING;
                  }
+[A-Z][a-zA-Z0-9]*     { cout << "Found a constructor name: " << yytext << endl;
+                    yylval.constructorName = new std::string(yytext);
+                    return CONSTRUCTORNAME;
+                 }
+
 \n             { ++g_lexer_line_num; return ENDL; }
+
 
 %%
 

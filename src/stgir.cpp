@@ -2,6 +2,8 @@
 
 using namespace stg;
 
+
+// Atom
 std::ostream &stg::operator<<(std::ostream &os, const Atom &a) {
   a.print(os);
   return os;
@@ -17,12 +19,14 @@ void AtomIdent::print(std::ostream &os) const {
 };
 
 
-std::ostream &stg::operator<<(std::ostream &os, const Binding &b) {
+// Binding
+ std::ostream &stg::operator<<(std::ostream &os, const Binding &b) {
     os << b.lhs << "=" << *b.rhs;
     return os;
 }
 
 
+// Expression
 void ExpressionAp::print(std::ostream &os) const {
   os << fn;
   os << "(";
@@ -31,3 +35,30 @@ void ExpressionAp::print(std::ostream &os) const {
   }
   os << ")";
 };
+
+void ExpressionConstructor::print(std::ostream &os) const {
+    os << name;
+  os << "(";
+  for (const Atom *a : args) {
+    os << *a << " ";
+  }
+  os << ")";
+
+}
+void ExpressionCase::print(std::ostream &os) const {
+    os << "case (" << *scrutinee << ") of" << "\n";
+    for(const CaseAlt *alt: alts) {
+        os << "\t" << *alt << "\n";
+    }
+    os << "endcase\n";
+}
+
+// Case
+
+std::ostream &stg::operator<<(std::ostream &os, const CaseAlt &a) {
+    a.print(os);
+    return os;
+};
+void CaseAltInt::print(std::ostream &os) const {
+    os << *lhs << " -> " << *rhs;
+}
