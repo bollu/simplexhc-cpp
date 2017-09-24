@@ -14,7 +14,10 @@ using namespace std;
 extern "C" int yylex();
 extern "C" int yyparse();
 
+extern stg::Program *g_program;
 int g_lexer_line_num = 1;
+
+void compile_program(stg::Program *p);
 %}
 
 
@@ -56,5 +59,6 @@ int main(void) {
     do {
         yyparse();
     } while (!feof(yyin));
+    compile_program(g_program);
     return 0;
 }

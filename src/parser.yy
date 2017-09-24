@@ -15,6 +15,8 @@ extern "C" int yyparse();
 
 std::vector<Atom *> g_atoms;
 std::vector<CaseAlt *> g_alts;
+std::vector<Binding *> g_bindings;
+stg::Program *g_program;
 
 
 void yyerror(const char *err) {
@@ -35,7 +37,6 @@ void add_alt_to_list(CaseAlt *a) {
   stg::CaseAlt *alt;
   stg::Expression *expr;
   stg::Binding *binding;
-  stg::Program *program;
   std::string *constructorName;
 
   bool UNDEF;
@@ -50,7 +51,7 @@ void add_alt_to_list(CaseAlt *a) {
 %token THINARROW
 %token EOFTOKEN
 
-%start program
+%start toplevel
 %token <atom>	ATOMINT
 %token <constructorName> CONSTRUCTORNAME
 %token <atom>	ATOMSTRING
@@ -69,9 +70,11 @@ void add_alt_to_list(CaseAlt *a) {
 
 
 %%
+toplevel:
+        program { g_program = new stg::Program(g_bindings); }
 program:
-  program binding lines { std::cout << "binding (nonterminal)\n" << *$2 << "\n"; }
-  | binding lines { std::cout << "binding (terminal)\n " << *$1 << "\n"; }
+  program binding lines { g_bindings.push_back($2); }
+  | binding lines { g_bindings.push_back($1); }
 
 atom: 
   ATOMINT | ATOMSTRING

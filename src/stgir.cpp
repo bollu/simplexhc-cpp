@@ -19,11 +19,6 @@ void AtomIdent::print(std::ostream &os) const {
 };
 
 
-// Binding
- std::ostream &stg::operator<<(std::ostream &os, const Binding &b) {
-    os << b.lhs << "=" << *b.rhs;
-    return os;
-}
 
 
 // Expression
@@ -60,5 +55,20 @@ std::ostream &stg::operator<<(std::ostream &os, const CaseAlt &a) {
     return os;
 };
 void CaseAltInt::print(std::ostream &os) const {
-    os << *lhs << " -> " << *rhs;
+    os << *lhs << " -> " << *rhs << "\n";
+}
+
+// Binding
+ std::ostream &stg::operator<<(std::ostream &os, const Binding &b) {
+    os << "define " << b.lhs << " = " << *b.rhs;
+    return os;
+}
+
+// Program
+
+std::ostream &stg::operator<<(std::ostream &os, const Program &p) {
+    for(Binding *b : p.bindings) {
+        os << *b;
+    }
+    return os;
 }

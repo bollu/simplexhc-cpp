@@ -152,7 +152,15 @@ public:
 
 // *** Program ***
 class Program {
-  SmallVector<Binding, 4> bindings;
+  SmallVector<Binding*, 4> bindings;
+    public:
+
+  Program(ArrayRef<Binding *> bs) {
+        for(Binding* b : bs)
+          bindings.push_back(b);
+      };
+  
+  friend std::ostream &operator<<(std::ostream &os, const Program &p);
 };
 
 } // end namespace stg.
