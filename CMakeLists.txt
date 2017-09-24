@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.4.3)
-project(simplexhc CXX)
+project(simplexhc C CXX)
 
 # Colors when compiling with clang
 set(CMAKE_CXX_FLAGS "-fdiagnostics-color=always")
@@ -39,3 +39,10 @@ add_custom_target(
         -i
         ${ALL_SOURCE_FILES}
 )
+
+# libstg
+add_library(stgruntime
+    STATIC
+    lib/libstg.c)
+set_target_properties(stgruntime PROPERTIES C_STANDARD 99)
+target_link_libraries(stgruntime -lstdc)
