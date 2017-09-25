@@ -16,6 +16,7 @@ extern "C" int yyparse();
 std::vector<Atom *> g_atoms;
 std::vector<CaseAlt *> g_alts;
 std::vector<Binding *> g_bindings;
+std::vector<Parameter *> g_params;
 stg::Program *g_program;
 
 
@@ -30,13 +31,19 @@ void add_atom_to_list (Atom *a) {
 void add_alt_to_list(CaseAlt *a) {
   g_alts.push_back(a);
 }
+
+void add_param_to_list(Parameter *p) {
+  g_params.push_back(p);
+}
 %}
 
 %union{
   stg::Atom *atom;
   stg::CaseAlt *alt;
   stg::Expression *expr;
+  stg::Lambda *lambda;
   stg::Binding *binding;
+  stg::Parameter *param;
   std::string *constructorName;
 
   bool UNDEF;
@@ -48,8 +55,10 @@ void add_alt_to_list(CaseAlt *a) {
 %token CASE
 %token OF
 %token SEMICOLON
+%token COLON
 %token THINARROW
 %token EOFTOKEN
+%token LAMBDA
 
 %start toplevel
 %token <atom>	ATOMINT
@@ -59,15 +68,19 @@ void add_alt_to_list(CaseAlt *a) {
 
 %type <program> program
 %type <binding> binding
+%type <lambda> lambda
 %type <expr> expr;
-%type <atom> atom;
-%type <alt> alt;
-%type <alt> altint;
+
 %type <UNDEF> atoms_;
 %type <UNDEF> altlist;
+%type <alt> alt;
+%type <alt> altint;
 
 %type <UNDEF> atomlist;
+%type <atom> atom;
 
+%type <UNDEF> params;
+%type <param> param;
 
 %%
 toplevel:
@@ -94,6 +107,21 @@ alt:
 altint: 
       ATOMINT THINARROW expr { $$ = new stg::CaseAltInt(cast<AtomInt>($1), $3); }
 
+param:
+  ATOMSTRING COLON CONSTRUCTORNAME { $$ = new stg::Parameter(cast<AtomIdent>($1)->getIdent(), *$3)}
+
+params_:
+  params_ param { add_param_to_list($2); }
+  | param { add_param_to_list($1); }
+
+params: 
+  OPENPAREN params_ CLOSEPAREN | OPENPAREN CLOSEPAREN
+
+lambda:
+  LAMBDA params THINARROW expr { $$ = new stg::Lambda(g_params, $4);
+                                 g_params.clear(); 
+                                }
+
 expr:
   // function application
   ATOMSTRING atomlist { $$ = new stg::ExpressionAp(cast<AtomIdent>($1)->getIdent(), g_atoms);
@@ -105,7 +133,7 @@ expr:
                                  g_alts.clear();}
 
 binding:
-  ATOMSTRING ASSIGN expr { $$ = new stg::Binding(cast<AtomIdent>($1)->getIdent(), $3); };
+  ATOMSTRING ASSIGN lambda { $$ = new stg::Binding(cast<AtomIdent>($1)->getIdent(), $3); };
 
 lines:
   lines ENDL |  ENDL

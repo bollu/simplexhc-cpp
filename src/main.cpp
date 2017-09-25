@@ -157,19 +157,22 @@ void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
     };
 }
 
-Function *materializeBinding(const Binding *b, Module &m, StgIRBuilder &builder,
-                             BuildCtx &bctx) {
-    FunctionType *FTy =
-        FunctionType::get(builder.getVoidTy(), /*isVarArg=*/false);
-    Function *F = Function::Create(FTy, GlobalValue::ExternalLinkage,
-                                   b->getName(), &m);
 
-    BasicBlock *Entry = BasicBlock::Create(m.getContext(), "entry", F);
-    builder.SetInsertPoint(Entry);
-    materializeExpr(b->getRhs(), m, builder, bctx);
-    builder.CreateRetVoid();
-    return F;
-}
+// Function *materializeBinding(const Binding *b, Module &m, StgIRBuilder &builder,
+//                              BuildCtx &bctx) {
+//     FunctionType *FTy =
+//         FunctionType::get(builder.getVoidTy(), /*isVarArg=*/false);
+//     Function *F = Function::Create(FTy, GlobalValue::ExternalLinkage,
+//                                    b->getName(), &m);
+// 
+//     BasicBlock *Entry = BasicBlock::Create(m.getContext(), "entry", F);
+//     builder.SetInsertPoint(Entry);
+//     materializeExpr(b->getRhs(), m, builder, bctx);
+//     builder.CreateRetVoid();
+//     return F;
+// }
+
+
 
 void compile_program(stg::Program *program) {
     cout << "> program: " << *program << "\n";
@@ -181,12 +184,12 @@ void compile_program(stg::Program *program) {
 
     Binding *entrystg = nullptr;
 
-    for (Binding *b : *program) {
-        if (b->getName() == "main") {
-            assert(!entrystg && "program has more than one main.");
-            entrystg = b;
-        }
-        bctx.bindingmap[b] = materializeBinding(b, m, builder, bctx);
-    }
+    // for (Binding *b : *program) {
+    //     if (b->getName() == "main") {
+    //         assert(!entrystg && "program has more than one main.");
+    //         entrystg = b;
+    //     }
+    //     bctx.bindingmap[b] = materializeBinding(b, m, builder, bctx);
+    // }
     m.print(errs(), nullptr);
 }

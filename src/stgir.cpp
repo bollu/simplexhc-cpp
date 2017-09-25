@@ -2,6 +2,20 @@
 
 using namespace stg;
 
+template<typename T>
+void printSepBy(std::ostream &os, std::string prefix, ArrayRef<T *> ts, std::string separator, std::string postfix) {
+  os << prefix;
+
+  for(int i = 0; i < ts.size(); i++) {
+    os << *ts[i];
+    if (i < (int)ts.size() - 2) {
+      os << separator;
+    }
+
+  }
+  os << postfix;
+}
+
 
 // Atom
 std::ostream &stg::operator<<(std::ostream &os, const Atom &a) {
@@ -18,17 +32,34 @@ void AtomIdent::print(std::ostream &os) const {
   os << "atom-" << ident;
 };
 
+//Parameter
+std::ostream &stg::operator<<(std::ostream &os, const Parameter &p) {
+  p.print(os);
+  return os;
+}
 
+void Parameter::print(std::ostream &os) const {
+  os << "(" << name << " : " << type << ")";
+}
 
+// Lambda
+
+std::ostream &stg::operator<<(std::ostream &os, const Lambda &l) {
+  l.print(os);
+  return os;
+}
+
+void Lambda::print(std::ostream &os) const {
+  os << "\\";
+  printSepBy(os, "(", (ArrayRef<Parameter *>)params, ",", ")");
+  os << "-> ";
+  os << *expr;
+}
 
 // Expression
 void ExpressionAp::print(std::ostream &os) const {
   os << fn;
-  os << "(";
-  for (const Atom *a : args) {
-    os << *a << " ";
-  }
-  os << ")";
+ printSepBy(os, "(", (ArrayRef<Atom *>)args, ",", ")");
 };
 
 void ExpressionConstructor::print(std::ostream &os) const {

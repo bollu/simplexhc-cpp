@@ -28,8 +28,8 @@ void compile_program(stg::Program *p);
 "of"           return OF;
 "case"         return CASE;
 ";"            return SEMICOLON;
-"->"            return THINARROW;
-
+"->"           return THINARROW;
+"\\"            return LAMBDA;
 
 [ \t]          ;
 

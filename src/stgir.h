@@ -10,6 +10,7 @@ namespace stg {
 using namespace llvm;
 using Identifier = std::string;
 using ConstructorName = std::string;
+using TypeName = std::string;
 
 // *** Atom ***
 class Atom {
@@ -163,16 +164,44 @@ class ExpressionCase : public Expression {
     }
 };
 
+// *** Parameter ***
+class Parameter {
+    Identifier name;
+    TypeName type;
+public:
+    Parameter(Identifier name, TypeName type) : name(name), type(type) {};
+    void print(std::ostream &os) const;
+    friend std::ostream &operator<<(std::ostream &os, const Parameter &p);
+
+};
+
+// *** Lambda ***
+class Lambda {
+public:
+    using ParamList = SmallVector<Parameter *, 4>;
+private:
+    ParamList params;
+    Expression *expr;
+public:
+    Lambda(ArrayRef<Parameter *> paramsref, Expression *expr) : expr(expr) {
+        for(Parameter *p : paramsref) {
+            params.push_back(p);
+        }
+    }
+    void print(std::ostream &os) const;
+    friend std::ostream &operator<<(std::ostream &os, const Lambda &l);
+};
+
 // *** Binding ***
 class Binding {
     Identifier lhs;
-    Expression *rhs;
+    Lambda *rhs;
 
    public:
-    Binding(Identifier lhs, Expression *rhs) : lhs(lhs), rhs(rhs){};
+    Binding(Identifier lhs, Lambda *rhs) : lhs(lhs), rhs(rhs){};
     friend std::ostream &operator<<(std::ostream &os, const Binding &b);
     Identifier getName() const { return lhs; }
-    const Expression *getRhs() const { return rhs; }
+    const Lambda *getRhs() const { return rhs; }
 };
 
 // *** Program ***
