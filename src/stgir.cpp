@@ -52,8 +52,11 @@ std::ostream &stg::operator<<(std::ostream &os, const Lambda &l) {
 void Lambda::print(std::ostream &os) const {
   os << "\\";
   printSepBy(os, "(", (ArrayRef<Parameter *>)params, ",", ")");
-  os << "-> ";
+  os << " -> ";
+  os << returnType << " ";
+  os << "{ ";
   os << *expr;
+  os << " }";
 }
 
 // Expression
@@ -64,11 +67,7 @@ void ExpressionAp::print(std::ostream &os) const {
 
 void ExpressionConstructor::print(std::ostream &os) const {
     os << name;
-  os << "(";
-  for (const Atom *a : args) {
-    os << *a << " ";
-  }
-  os << ")";
+    printSepBy(os, "(", ArrayRef<Atom*>(args), ",", ")");
 
 }
 void ExpressionCase::print(std::ostream &os) const {
@@ -98,8 +97,10 @@ void CaseAltInt::print(std::ostream &os) const {
 // Program
 
 std::ostream &stg::operator<<(std::ostream &os, const Program &p) {
+    os << "\n";
     for(Binding *b : p.bindings) {
         os << *b;
+        os << "\n";
     }
     return os;
 }

@@ -11,6 +11,42 @@ using namespace llvm;
 using Identifier = std::string;
 using ConstructorName = std::string;
 using TypeName = std::string;
+// *** Data declaration
+class DataDeclaration {
+public:
+    using TypeList = SmallVector<TypeName, 4>;
+private:
+    ConstructorName name;
+    TypeList types;
+public:
+    DataDeclaration(ConstructorName name, ArrayRef<TypeName> typesref) : name(name) {
+        for(TypeName t : typesref) {
+            types.push_back(t);
+        }
+    }
+    ConstructorName getName() { return name; }
+
+  using iterator = TypeList::iterator;
+  using const_iterator = TypeList::const_iterator;
+
+  iterator types_begin() { return types.begin(); }
+  iterator types_end() { return types.end(); }
+
+  const_iterator types_begin() const { return types.begin(); }
+  const_iterator types_end() const { return types.end(); }
+
+  iterator_range<iterator> types_range() { return make_range<iterator>(types_begin(), types_end()); };
+
+  size_t types_size() const { return types.size(); }
+  bool types_empty() const { return types.empty(); }
+
+  const TypeName types_front() const { return types.front(); }
+  TypeName types_front() { return types.front(); }
+
+  const TypeName types_back() const { return types.back(); }
+  TypeName types_back() { return types.back(); }
+
+};
 
 // *** Atom ***
 class Atom {
@@ -179,17 +215,42 @@ public:
 class Lambda {
 public:
     using ParamList = SmallVector<Parameter *, 4>;
+    TypeName returnType;
 private:
     ParamList params;
     Expression *expr;
 public:
-    Lambda(ArrayRef<Parameter *> paramsref, Expression *expr) : expr(expr) {
+    Lambda(ArrayRef<Parameter *> paramsref,
+           TypeName returnType,
+           Expression *expr) : 
+    expr(expr), returnType(returnType) {
         for(Parameter *p : paramsref) {
             params.push_back(p);
         }
     }
     void print(std::ostream &os) const;
     friend std::ostream &operator<<(std::ostream &os, const Lambda &l);
+
+    const Expression *getRhs() const { return expr; }
+
+    using iterator = ParamList::iterator;
+    using const_iterator = ParamList::const_iterator;
+
+    iterator begin() { return params.begin(); }
+    iterator end() { return params.end(); }
+
+    const_iterator begin() const { return params.begin(); }
+    const_iterator end() const { return params.end(); }
+
+    size_t size() const { return params.size(); }
+    bool empty() const { return params.empty(); }
+
+    const Parameter *front() const { return params.front(); }
+    Parameter *front() { return params.front(); }
+
+    const Parameter *back() const { return params.back(); }
+    Parameter *back() { return params.back(); }
+
 };
 
 // *** Binding ***
@@ -207,29 +268,27 @@ class Binding {
 // *** Program ***
 class Program {
    public:
-    Program(ArrayRef<Binding *> bs) {
+    Program(ArrayRef<Binding *> bs, ArrayRef<DataDeclaration *>ds ) {
         for (Binding *b : bs) bindings.push_back(b);
     };
 
+    using DataDeclarationList = SmallVector<DataDeclaration *, 4>;
     using BindingList = SmallVector<Binding *, 4>;
-    using iterator = BindingList::iterator;
+
+    using binding_iterator = BindingList::iterator;
 
     friend std::ostream &operator<<(std::ostream &os, const Program &p);
 
-    iterator begin() { return bindings.begin(); }
-    iterator end() { return bindings.end(); }
+    binding_iterator bindings_begin() { return bindings.begin(); }
+    binding_iterator bindings_end() { return bindings.end(); }
 
-    size_t size() const { return bindings.size(); }
-    bool empty() const { return bindings.empty(); }
-
-    const Binding *front() const { return bindings.front(); }
-    Binding *front() { return bindings.front(); }
-
-    const Binding *back() const { return bindings.back(); }
-    Binding *back() { return bindings.back(); }
+    iterator_range<binding_iterator> bindings_range() {
+        return make_range(bindings_begin(), bindings_end());
+    }
 
    private:
     BindingList bindings;
+    DataDeclarationList decls;
 };
 
 }  // end namespace stg.

@@ -25,11 +25,15 @@ void compile_program(stg::Program *p);
 "="            return ASSIGN; 
 "("            return OPENPAREN; 
 ")"            return CLOSEPAREN;
+"{"            return OPENFLOWER;
+"}"            return CLOSEFLOWER;
 "of"           return OF;
 "case"         return CASE;
 ";"            return SEMICOLON;
 "->"           return THINARROW;
-"\\"            return LAMBDA;
+"\\"           return LAMBDA;
+"binding"      return BINDING;
+"data"         return DATA;
 
 [ \t]          ;
 

@@ -49,11 +49,11 @@ struct BuildCtx {
             Value *idx = builder.CreateLoad(stackPrimTop, "idx");
         Value *stackSlot = builder.CreateGEP(stackPrim, {builder.getInt64(0), idx}, "slot");
             builder.CreateStore(&arg, stackSlot);
-            
+
             idx = builder.CreateAdd(idx, builder.getInt64(1), "idx_inc");
             builder.CreateStore(idx, stackPrimTop);
             builder.CreateRetVoid();
-            
+
         }
     }
 
@@ -66,7 +66,7 @@ struct BuildCtx {
             BasicBlock::Create(m.getContext(), "entry", popInt);
         builder.SetInsertPoint(entry);
 
-        
+
         Value *idx = builder.CreateLoad(stackPrimTop, "idx");
         idx = builder.CreateSub(idx, builder.getInt64(1), "idx_dec");
         Value *stackSlot = builder.CreateGEP(stackPrim, {builder.getInt64(0), idx}, "slot");
@@ -74,7 +74,7 @@ struct BuildCtx {
 
         builder.CreateStore(idx, stackPrimTop);
         builder.CreateRet(Ret);
-        
+
     }
 
    public:
@@ -150,27 +150,34 @@ void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
         case Expression::EK_Ap:
             materializeExpr(cast<ExpressionAp>(e), m, builder, bctx);
             break;
-        case Expression::EK_Cons:
+        case Expression::EK_Cons:            
         case Expression::EK_Case:
             assert(false && "unimplemented");
             break;
     };
 }
 
+void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
+                       BuildCtx &bctx) {
+    for(const Parameter *p : *l) {
+        cout << "parameter: " << *p;
+    }
+    materializeExpr(l->getRhs(), m, builder, bctx);
+}
 
-// Function *materializeBinding(const Binding *b, Module &m, StgIRBuilder &builder,
-//                              BuildCtx &bctx) {
-//     FunctionType *FTy =
-//         FunctionType::get(builder.getVoidTy(), /*isVarArg=*/false);
-//     Function *F = Function::Create(FTy, GlobalValue::ExternalLinkage,
-//                                    b->getName(), &m);
-// 
-//     BasicBlock *Entry = BasicBlock::Create(m.getContext(), "entry", F);
-//     builder.SetInsertPoint(Entry);
-//     materializeExpr(b->getRhs(), m, builder, bctx);
-//     builder.CreateRetVoid();
-//     return F;
-// }
+Function *materializeBinding(const Binding *b, Module &m, StgIRBuilder &builder,
+                             BuildCtx &bctx) {
+    FunctionType *FTy =
+        FunctionType::get(builder.getVoidTy(), /*isVarArg=*/false);
+    Function *F = Function::Create(FTy, GlobalValue::ExternalLinkage,
+                                   b->getName(), &m);
+
+    BasicBlock *Entry = BasicBlock::Create(m.getContext(), "entry", F);
+    builder.SetInsertPoint(Entry);
+    materializeLambda(b->getRhs(), m, builder, bctx);
+    builder.CreateRetVoid();
+    return F;
+}
 
 
 
@@ -184,12 +191,12 @@ void compile_program(stg::Program *program) {
 
     Binding *entrystg = nullptr;
 
-    // for (Binding *b : *program) {
-    //     if (b->getName() == "main") {
-    //         assert(!entrystg && "program has more than one main.");
-    //         entrystg = b;
-    //     }
-    //     bctx.bindingmap[b] = materializeBinding(b, m, builder, bctx);
-    // }
+    for (Binding *b : program->bindings_range()) {
+        if (b->getName() == "main") {
+            assert(!entrystg && "program has more than one main.");
+            entrystg = b;
+        }
+        bctx.bindingmap[b] = materializeBinding(b, m, builder, bctx);
+    }
     m.print(errs(), nullptr);
 }
