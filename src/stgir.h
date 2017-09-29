@@ -14,17 +14,17 @@ using TypeName = std::string;
 // *** Data declaration
 class DataDeclaration {
 public:
-    using TypeList = SmallVector<TypeName, 4>;
+    using TypeList = SmallVector<TypeName *, 4>;
 private:
     ConstructorName name;
     TypeList types;
 public:
-    DataDeclaration(ConstructorName name, ArrayRef<TypeName> typesref) : name(name) {
-        for(TypeName t : typesref) {
+    DataDeclaration(ConstructorName name, ArrayRef<TypeName *> typesref) : name(name) {
+        for(TypeName *t : typesref) {
             types.push_back(t);
         }
     }
-    ConstructorName getName() { return name; }
+    ConstructorName getName() const { return name; }
 
   using iterator = TypeList::iterator;
   using const_iterator = TypeList::const_iterator;
@@ -36,15 +36,13 @@ public:
   const_iterator types_end() const { return types.end(); }
 
   iterator_range<iterator> types_range() { return make_range<iterator>(types_begin(), types_end()); };
+  iterator_range<const_iterator> types_range() const { return make_range<const_iterator>(types_begin(), types_end()); };
 
   size_t types_size() const { return types.size(); }
   bool types_empty() const { return types.empty(); }
 
-  const TypeName types_front() const { return types.front(); }
-  TypeName types_front() { return types.front(); }
-
-  const TypeName types_back() const { return types.back(); }
-  TypeName types_back() { return types.back(); }
+  void print(std::ostream &os) const;
+  friend std::ostream &operator <<(std::ostream &os, const DataDeclaration &decl);
 
 };
 
@@ -270,6 +268,7 @@ class Program {
    public:
     Program(ArrayRef<Binding *> bs, ArrayRef<DataDeclaration *>ds ) {
         for (Binding *b : bs) bindings.push_back(b);
+        for (DataDeclaration *d : ds) decls.push_back(d);
     };
 
     using DataDeclarationList = SmallVector<DataDeclaration *, 4>;

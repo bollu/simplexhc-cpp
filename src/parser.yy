@@ -13,17 +13,22 @@ using namespace llvm;
 extern "C" int yylex();
 extern "C" int yyparse();
 
+extern int g_lexer_success;
+extern int g_lexer_line_num;
+
+void yyerror(const char *s) {
+  printf("line %d: %s\n", g_lexer_line_num, s);
+  g_lexer_success = 0;
+}
+
 std::vector<Atom *> g_atoms;
 std::vector<CaseAlt *> g_alts;
 std::vector<Binding *> g_bindings;
 std::vector<DataDeclaration *> g_datadeclarations;
 std::vector<Parameter *> g_params;
+std::vector<std::string *>g_types;
 stg::Program *g_program;
 
-
-void yyerror(const char *err) {
-    std::cerr << "YYerr: " << err << "\n";
-}
 
 void add_atom_to_list (Atom *a) {
   g_atoms.push_back(a);
@@ -93,17 +98,22 @@ void add_param_to_list(Parameter *p) {
 
 %%
 toplevel:
-        program { g_program = new stg::Program(g_bindings, g_datadeclarations); }
+        program {
+                  g_program = new stg::Program(g_bindings, g_datadeclarations); }
 
 binding:
   BINDING ATOMSTRING ASSIGN lambda { $$ = new stg::Binding(cast<AtomIdent>($2)->getIdent(), $4); };
 
+typeslist_:
+  typeslist_ CONSTRUCTORNAME { g_types.push_back($2); }
+  | CONSTRUCTORNAME { g_types.push_back($1); }
+typeslist: OPENPAREN CLOSEPAREN | OPENPAREN typeslist_ CLOSEPAREN
+
+
 datadeclaration:
-  DATA CONSTRUCTORNAME atomlist { 
-    std::vector<TypeName> types;
-    for(Atom *a : g_atoms) { types.push_back(cast<AtomIdent>(a)->getIdent()); }
-    $$ = new stg::DataDeclaration(*$2, types);
-    g_atoms.clear();
+  DATA CONSTRUCTORNAME typeslist { 
+    $$ = new stg::DataDeclaration(*$2, g_types);
+    g_types.clear();
   }
 
 topleveldefn:
@@ -111,7 +121,7 @@ topleveldefn:
   | datadeclaration { g_datadeclarations.push_back($1); }
 
 program:
-  program topleveldefn lines 
+  program topleveldefn lines
   | topleveldefn lines
 
 atom: 

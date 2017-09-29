@@ -181,7 +181,7 @@ Function *materializeBinding(const Binding *b, Module &m, StgIRBuilder &builder,
 
 
 
-void compile_program(stg::Program *program) {
+int compile_program(stg::Program *program) {
     cout << "> program: " << *program << "\n";
     LLVMContext ctx;
     StgIRBuilder builder(ctx);
@@ -199,4 +199,5 @@ void compile_program(stg::Program *program) {
         bctx.bindingmap[b] = materializeBinding(b, m, builder, bctx);
     }
     m.print(errs(), nullptr);
+    return 0;
 }

@@ -15,6 +15,17 @@ void printSepBy(std::ostream &os, std::string prefix, ArrayRef<T *> ts, std::str
   }
   os << postfix;
 }
+// DataDeclaration
+void DataDeclaration::print(std::ostream &os) const {
+  os << "data ";
+  os << name;
+  printSepBy(os, "(", ArrayRef<TypeName *>(types), " ", ")");
+};
+
+std::ostream &stg::operator <<(std::ostream &os, const DataDeclaration &decl) {
+  decl.print(os);
+  return os;
+}
 
 
 // Atom
@@ -51,7 +62,7 @@ std::ostream &stg::operator<<(std::ostream &os, const Lambda &l) {
 
 void Lambda::print(std::ostream &os) const {
   os << "\\";
-  printSepBy(os, "(", (ArrayRef<Parameter *>)params, ",", ")");
+  printSepBy(os, "(", (ArrayRef<Parameter *>)params, " ", ")");
   os << " -> ";
   os << returnType << " ";
   os << "{ ";
@@ -62,12 +73,12 @@ void Lambda::print(std::ostream &os) const {
 // Expression
 void ExpressionAp::print(std::ostream &os) const {
   os << fn;
- printSepBy(os, "(", (ArrayRef<Atom *>)args, ",", ")");
+ printSepBy(os, "(", (ArrayRef<Atom *>)args, " ", ")");
 };
 
 void ExpressionConstructor::print(std::ostream &os) const {
     os << name;
-    printSepBy(os, "(", ArrayRef<Atom*>(args), ",", ")");
+    printSepBy(os, "(", ArrayRef<Atom*>(args), " ", ")");
 
 }
 void ExpressionCase::print(std::ostream &os) const {
@@ -98,6 +109,9 @@ void CaseAltInt::print(std::ostream &os) const {
 
 std::ostream &stg::operator<<(std::ostream &os, const Program &p) {
     os << "\n";
+    for (DataDeclaration *d : p.decls){
+      os << *d << "\n";
+    }
     for(Binding *b : p.bindings) {
         os << *b;
         os << "\n";

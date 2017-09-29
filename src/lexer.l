@@ -16,8 +16,9 @@ extern "C" int yyparse();
 
 extern stg::Program *g_program;
 int g_lexer_line_num = 1;
+int g_lexer_success = 1;
 
-void compile_program(stg::Program *p);
+int compile_program(stg::Program *p);
 %}
 
 
@@ -53,6 +54,7 @@ void compile_program(stg::Program *p);
 \n             { ++g_lexer_line_num; return ENDL; }
 
 
+
 %%
 
 int yywrap(void) {
@@ -63,6 +65,9 @@ int main(void) {
     do {
         yyparse();
     } while (!feof(yyin));
-    compile_program(g_program);
-    return 0;
+    if (g_lexer_success) {
+        return compile_program(g_program);
+    }else {
+        return 1;
+    }
 }
