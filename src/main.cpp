@@ -12,6 +12,7 @@
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Verifier.h"
 #include "stgir.h"
+#include "llvm/IR/Instructions.h"
 
 using namespace std;
 using namespace stg;
@@ -40,44 +41,6 @@ struct BuildCtx {
 
     using TypeMapTy = std::map<ConstructorName, Type *>;
 
-    void buildPushInt(Module &m, StgIRBuilder &builder) {
-        assert(pushInt);
-        assert(stackPrimTop);
-        assert(stackPrim);
-
-        BasicBlock *entry =
-            BasicBlock::Create(m.getContext(), "entry", pushInt);
-        builder.SetInsertPoint(entry);
-        for (Argument &arg : pushInt->args()) {
-            arg.setName("i");
-            Value *idx = builder.CreateLoad(stackPrimTop, "idx");
-            Value *stackSlot = builder.CreateGEP(
-                stackPrim, {builder.getInt64(0), idx}, "slot");
-            builder.CreateStore(&arg, stackSlot);
-
-            idx = builder.CreateAdd(idx, builder.getInt64(1), "idx_inc");
-            builder.CreateStore(idx, stackPrimTop);
-            builder.CreateRetVoid();
-        }
-    }
-
-    void buildPopInt(Module &m, StgIRBuilder &builder) {
-        assert(popInt);
-        assert(stackPrimTop);
-        assert(stackPrim);
-
-        BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", popInt);
-        builder.SetInsertPoint(entry);
-
-        Value *idx = builder.CreateLoad(stackPrimTop, "idx");
-        idx = builder.CreateSub(idx, builder.getInt64(1), "idx_dec");
-        Value *stackSlot =
-            builder.CreateGEP(stackPrim, {builder.getInt64(0), idx}, "slot");
-        Value *Ret = builder.CreateLoad(stackSlot, "val");
-
-        builder.CreateStore(idx, stackPrimTop);
-        builder.CreateRet(Ret);
-    }
 
     Function *printInt, *popInt, *pushInt, *malloc;
     GlobalVariable *stackPrim;
@@ -115,8 +78,8 @@ struct BuildCtx {
             m, builder.getInt64Ty(), /*isConstant=*/false,
             GlobalValue::ExternalLinkage,
             ConstantInt::get(builder.getInt64Ty(), 0), "stackPrimTop");
-        buildPushInt(m, builder);
-        buildPopInt(m, builder);
+        addPushIntToModule(m, builder);
+        addPopIntToModule(m, builder);
     }
 
     void insertBinding(Binding *b, Function *f) { bindingmap[b] = f; }
@@ -139,7 +102,7 @@ struct BuildCtx {
             cerr << __PRETTY_FUNCTION__ << " |unknown type with name: " << name
                  << "\n";
             errs() << "TypeMap:\n";
-            for(auto It : typemap) {
+            for (auto It : typemap) {
                 errs() << It.first << " -> " << *It.second << "\n";
             }
             errs() << "---\n";
@@ -151,11 +114,51 @@ struct BuildCtx {
    private:
     BindingMapTy bindingmap;
     TypeMapTy typemap;
-    
+
     static void populateIntrinsicTypes(Module &m, StgIRBuilder &builder,
                                        TypeMapTy &map) {
         map["PrimInt"] = builder.getInt64Ty();
     }
+
+    void addPushIntToModule(Module &m, StgIRBuilder &builder) {
+        assert(pushInt);
+        assert(stackPrimTop);
+        assert(stackPrim);
+
+        BasicBlock *entry =
+            BasicBlock::Create(m.getContext(), "entry", pushInt);
+        builder.SetInsertPoint(entry);
+        for (Argument &arg : pushInt->args()) {
+            arg.setName("i");
+            Value *idx = builder.CreateLoad(stackPrimTop, "idx");
+            Value *stackSlot = builder.CreateGEP(
+                stackPrim, {builder.getInt64(0), idx}, "slot");
+            builder.CreateStore(&arg, stackSlot);
+
+            idx = builder.CreateAdd(idx, builder.getInt64(1), "idx_inc");
+            builder.CreateStore(idx, stackPrimTop);
+            builder.CreateRetVoid();
+        }
+    }
+
+    void addPopIntToModule(Module &m, StgIRBuilder &builder) {
+        assert(popInt);
+        assert(stackPrimTop);
+        assert(stackPrim);
+
+        BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", popInt);
+        builder.SetInsertPoint(entry);
+
+        Value *idx = builder.CreateLoad(stackPrimTop, "idx");
+        idx = builder.CreateSub(idx, builder.getInt64(1), "idx_dec");
+        Value *stackSlot =
+            builder.CreateGEP(stackPrim, {builder.getInt64(0), idx}, "slot");
+        Value *Ret = builder.CreateLoad(stackSlot, "val");
+
+        builder.CreateStore(idx, stackPrimTop);
+        builder.CreateRet(Ret);
+    }
+
 };
 
 Value *materializeAtom(const AtomInt *i, StgIRBuilder &builder) {
@@ -184,11 +187,28 @@ void materializeExpr(const ExpressionConstructor *c, Module &m,
     }
     Value *rawMem = builder.CreateCall(bctx.malloc,
                                        {builder.getInt64(TotalSize)}, "rawmem");
+    Type *structType = bctx.getTypeFromName(c->getName());
+    Value *typedMem =
+        builder.CreateBitCast(rawMem, structType->getPointerTo(), "typedmem");
+    // Push values into the constructed value
+    unsigned i = 0;
+    for(Atom *a : c->args_range()) {
+        AtomInt *ai = cast<AtomInt>(a);
+        std::vector<Value*> idxs = {builder.getInt64(0), builder.getInt32(0)};
+        Value *indexedMem = builder.CreateGEP(typedMem, idxs, "indexedmem_" + std::to_string(i));
+
+        Value *v = materializeAtom(ai, builder);
+        v->setName("param_" + std::to_string(i));
+        builder.CreateStore(v, indexedMem);
+        i++;
+    }
+    Value *memAddr = builder.CreatePtrToInt(typedMem, builder.getInt64Ty(), "memaddr");
+    builder.CreateCall(bctx.pushInt, {memAddr});
+
 };
 
 void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
                      BuildCtx &bctx) {
-    cout << e->getKind() << "|" << *e << "\n";
     switch (e->getKind()) {
         case Expression::EK_Ap:
             materializeExpr(cast<ExpressionAp>(e), m, builder, bctx);

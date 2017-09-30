@@ -170,6 +170,7 @@ class ExpressionConstructor : public Expression {
         for (Atom *arg : argsref) args.push_back(arg);
     };
 
+    ConstructorName getName() const { return name; };
     void print(std::ostream &os) const;
     static bool classof(const Expression *E) {
         return E->getKind() == Expression::EK_Cons;

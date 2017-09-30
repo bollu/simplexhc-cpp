@@ -2,11 +2,11 @@ cmake_minimum_required(VERSION 3.4.3)
 project(simplexhc C CXX)
 
 # Colors when compiling with clang
-set(CMAKE_CXX_FLAGS "-fdiagnostics-color=always")
+set(CMAKE_CXX_FLAGS "-fdiagnostics-color=always -fno-rtti")
 
 # LLVM
 find_package(LLVM REQUIRED)
-llvm_map_components_to_libnames(LLVM_LIBS Core support)
+llvm_map_components_to_libnames(LLVM_LIBS Core Support)
 
 # FLEX AND BISON
 find_package(BISON)
