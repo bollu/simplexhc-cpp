@@ -35,7 +35,11 @@ Function *getOrCreateFunction(Module &m, FunctionType *FTy, std::string name) {
 
 static const int stackSize = 5000;
 struct BuildCtx {
-   private:
+   public:
+    using BindingMapTy = std::map<Binding *, Function *>;
+
+    using TypeMapTy = std::map<ConstructorName, Type *>;
+
     void buildPushInt(Module &m, StgIRBuilder &builder) {
         assert(pushInt);
         assert(stackPrimTop);
@@ -47,13 +51,13 @@ struct BuildCtx {
         for (Argument &arg : pushInt->args()) {
             arg.setName("i");
             Value *idx = builder.CreateLoad(stackPrimTop, "idx");
-        Value *stackSlot = builder.CreateGEP(stackPrim, {builder.getInt64(0), idx}, "slot");
+            Value *stackSlot = builder.CreateGEP(
+                stackPrim, {builder.getInt64(0), idx}, "slot");
             builder.CreateStore(&arg, stackSlot);
 
             idx = builder.CreateAdd(idx, builder.getInt64(1), "idx_inc");
             builder.CreateStore(idx, stackPrimTop);
             builder.CreateRetVoid();
-
         }
     }
 
@@ -62,38 +66,30 @@ struct BuildCtx {
         assert(stackPrimTop);
         assert(stackPrim);
 
-        BasicBlock *entry =
-            BasicBlock::Create(m.getContext(), "entry", popInt);
+        BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", popInt);
         builder.SetInsertPoint(entry);
-
 
         Value *idx = builder.CreateLoad(stackPrimTop, "idx");
         idx = builder.CreateSub(idx, builder.getInt64(1), "idx_dec");
-        Value *stackSlot = builder.CreateGEP(stackPrim, {builder.getInt64(0), idx}, "slot");
+        Value *stackSlot =
+            builder.CreateGEP(stackPrim, {builder.getInt64(0), idx}, "slot");
         Value *Ret = builder.CreateLoad(stackSlot, "val");
 
         builder.CreateStore(idx, stackPrimTop);
         builder.CreateRet(Ret);
-
     }
 
-   public:
-    Function *printInt, *popInt, *pushInt;
+    Function *printInt, *popInt, *pushInt, *malloc;
     GlobalVariable *stackPrim;
     GlobalVariable *stackPrimTop;
-    using BindingMapTy = std::map<Binding *, Function *>;
-    BindingMapTy bindingmap;
 
     BuildCtx(Module &m, StgIRBuilder &builder) {
+        populateIntrinsicTypes(m, builder, typemap);
+
         printInt = getOrCreateFunction(m,
                                        FunctionType::get(builder.getVoidTy(),
                                                          /*isVarArg=*/false),
                                        "printInt");
-        // printInt = getOrCreateFunction(
-        //     m,
-        //     FunctionType::get(builder.getVoidTy(), {builder.getInt64Ty()},
-        //                      /*isVarArg=*/false),
-        //    "printInt");
 
         popInt = getOrCreateFunction(
             m, FunctionType::get(builder.getInt64Ty(), /*isVarArg=*/false),
@@ -109,6 +105,12 @@ struct BuildCtx {
                                        GlobalValue::ExternalLinkage,
                                        stackPrimInit, "stackPrim");
 
+        malloc = getOrCreateFunction(
+            m,
+            FunctionType::get(builder.getInt8Ty()->getPointerTo(),
+                              {builder.getInt64Ty()}, false),
+            "malloc");
+
         stackPrimTop = new GlobalVariable(
             m, builder.getInt64Ty(), /*isConstant=*/false,
             GlobalValue::ExternalLinkage,
@@ -117,13 +119,42 @@ struct BuildCtx {
         buildPopInt(m, builder);
     }
 
-    Function *getFunctionFromName(std::string name) {
+    void insertBinding(Binding *b, Function *f) { bindingmap[b] = f; }
+
+    Function *getFunctionFromName(std::string name) const {
         if (name == "printInt") return printInt;
         for (auto It : bindingmap)
             if (It.first->getName() == name) return It.second;
+
         cerr << __PRETTY_FUNCTION__ << " |unknown function with name: " << name
              << "\n";
         assert(false && "unknown function");
+    }
+
+    void insertType(std::string name, Type *T) { typemap[name] = T; }
+
+    Type *getTypeFromName(std::string name) const {
+        auto It = typemap.find(name);
+        if (It == typemap.end()) {
+            cerr << __PRETTY_FUNCTION__ << " |unknown type with name: " << name
+                 << "\n";
+            errs() << "TypeMap:\n";
+            for(auto It : typemap) {
+                errs() << It.first << " -> " << *It.second << "\n";
+            }
+            errs() << "---\n";
+            assert(false && "unknown type name");
+        }
+        return It->second;
+    }
+
+   private:
+    BindingMapTy bindingmap;
+    TypeMapTy typemap;
+    
+    static void populateIntrinsicTypes(Module &m, StgIRBuilder &builder,
+                                       TypeMapTy &map) {
+        map["PrimInt"] = builder.getInt64Ty();
     }
 };
 
@@ -143,6 +174,18 @@ void materializeExpr(const ExpressionAp *ap, Module &m, StgIRBuilder &builder,
     }
 };
 
+void materializeExpr(const ExpressionConstructor *c, Module &m,
+                     StgIRBuilder &builder, BuildCtx &bctx) {
+    int TotalSize = 0;
+    for (Atom *a : c->args_range()) {
+        AtomInt *ai = cast<AtomInt>(a);
+
+        TotalSize += 4;  // bytes.
+    }
+    Value *rawMem = builder.CreateCall(bctx.malloc,
+                                       {builder.getInt64(TotalSize)}, "rawmem");
+};
+
 void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
                      BuildCtx &bctx) {
     cout << e->getKind() << "|" << *e << "\n";
@@ -150,7 +193,9 @@ void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
         case Expression::EK_Ap:
             materializeExpr(cast<ExpressionAp>(e), m, builder, bctx);
             break;
-        case Expression::EK_Cons:            
+        case Expression::EK_Cons:
+            materializeExpr(cast<ExpressionConstructor>(e), m, builder, bctx);
+            break;
         case Expression::EK_Case:
             assert(false && "unimplemented");
             break;
@@ -159,7 +204,7 @@ void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
 
 void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
                        BuildCtx &bctx) {
-    for(const Parameter *p : *l) {
+    for (const Parameter *p : *l) {
         cout << "parameter: " << *p;
     }
     materializeExpr(l->getRhs(), m, builder, bctx);
@@ -169,8 +214,8 @@ Function *materializeBinding(const Binding *b, Module &m, StgIRBuilder &builder,
                              BuildCtx &bctx) {
     FunctionType *FTy =
         FunctionType::get(builder.getVoidTy(), /*isVarArg=*/false);
-    Function *F = Function::Create(FTy, GlobalValue::ExternalLinkage,
-                                   b->getName(), &m);
+    Function *F =
+        Function::Create(FTy, GlobalValue::ExternalLinkage, b->getName(), &m);
 
     BasicBlock *Entry = BasicBlock::Create(m.getContext(), "entry", F);
     builder.SetInsertPoint(Entry);
@@ -179,7 +224,17 @@ Function *materializeBinding(const Binding *b, Module &m, StgIRBuilder &builder,
     return F;
 }
 
+StructType *materializeDataDeclaration(const DataDeclaration *decl,
+                                       const Module &m, const BuildCtx &bctx) {
+    std::vector<Type *> Elements;
+    for (TypeName *Name : decl->types_range()) {
+        Elements.push_back(bctx.getTypeFromName(*Name));
+    }
 
+    StructType *Ty =
+        StructType::create(m.getContext(), Elements, decl->getName());
+    return Ty;
+};
 
 int compile_program(stg::Program *program) {
     cout << "> program: " << *program << "\n";
@@ -190,13 +245,18 @@ int compile_program(stg::Program *program) {
     BuildCtx bctx(m, builder);
 
     Binding *entrystg = nullptr;
+    for (DataDeclaration *decl : program->declarations_range()) {
+        bctx.insertType(decl->getName(),
+                        materializeDataDeclaration(decl, m, bctx));
+    }
 
     for (Binding *b : program->bindings_range()) {
         if (b->getName() == "main") {
             assert(!entrystg && "program has more than one main.");
             entrystg = b;
         }
-        bctx.bindingmap[b] = materializeBinding(b, m, builder, bctx);
+
+        bctx.insertBinding(b, materializeBinding(b, m, builder, bctx));
     }
     m.print(errs(), nullptr);
     return 0;

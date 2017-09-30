@@ -109,7 +109,7 @@ void CaseAltInt::print(std::ostream &os) const {
 
 std::ostream &stg::operator<<(std::ostream &os, const Program &p) {
     os << "\n";
-    for (DataDeclaration *d : p.decls){
+    for (DataDeclaration *d : p.declarations){
       os << *d << "\n";
     }
     for(Binding *b : p.bindings) {

@@ -11,6 +11,8 @@ using namespace llvm;
 using Identifier = std::string;
 using ConstructorName = std::string;
 using TypeName = std::string;
+
+
 // *** Data declaration
 class DataDeclaration {
 public:
@@ -140,10 +142,25 @@ class ExpressionAp : public Expression {
 };
 
 class ExpressionConstructor : public Expression {
+    public:
+        using ArgsTy = SmallVector<Atom *, 2>;
+    private:
     ConstructorName name;
     SmallVector<Atom *, 2> args;
 
    public:
+    using iterator = ArgsTy::iterator;
+    using const_iterator = ArgsTy::const_iterator;
+
+    iterator args_begin() { return args.begin(); }
+    const_iterator args_begin() const { return args.begin(); }
+    
+    iterator args_end() { return args.end(); }
+    const_iterator args_end() const { return args.end(); }
+
+    iterator_range<iterator> args_range() { return make_range(args_begin(), args_end()); }
+    iterator_range<const_iterator> args_range() const { return make_range(args_begin(), args_end()); }
+
     ExpressionConstructor(ConstructorName name,
                           std::initializer_list<Atom *> args)
         : name(name), args(args), Expression(Expression::EK_Cons){};
@@ -268,26 +285,35 @@ class Program {
    public:
     Program(ArrayRef<Binding *> bs, ArrayRef<DataDeclaration *>ds ) {
         for (Binding *b : bs) bindings.push_back(b);
-        for (DataDeclaration *d : ds) decls.push_back(d);
+        for (DataDeclaration *d : ds) declarations.push_back(d);
     };
 
     using DataDeclarationList = SmallVector<DataDeclaration *, 4>;
     using BindingList = SmallVector<Binding *, 4>;
 
     using binding_iterator = BindingList::iterator;
+    using declaration_iterator = DataDeclarationList::iterator;
 
     friend std::ostream &operator<<(std::ostream &os, const Program &p);
 
     binding_iterator bindings_begin() { return bindings.begin(); }
     binding_iterator bindings_end() { return bindings.end(); }
 
+
     iterator_range<binding_iterator> bindings_range() {
         return make_range(bindings_begin(), bindings_end());
     }
 
+    declaration_iterator declarations_begin() { return declarations.begin(); }
+    declaration_iterator declarations_end() { return declarations.end(); }
+
+    iterator_range<declaration_iterator> declarations_range() {
+        return make_range(declarations_begin(), declarations_end());
+    }
+
    private:
     BindingList bindings;
-    DataDeclarationList decls;
+    DataDeclarationList declarations;
 };
 
 }  // end namespace stg.
