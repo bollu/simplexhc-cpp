@@ -248,7 +248,7 @@ void materializeConstructor(const ExpressionConstructor *c, Module &m,
 };
 
 // materialize alternate handling of case `ident` of ...)
-Function *materializeCaseIdentAltHandler(const ExpressionCase *c, Module &m,
+Function *materializeCaseConstructorAlt(const ExpressionCase *c, Module &m,
                                          StgIRBuilder &builder,
                                          BuildCtx &bctx) {
     const Identifier scrutinee = cast<AtomIdent>(c->getScrutinee())->getIdent();
@@ -257,21 +257,36 @@ Function *materializeCaseIdentAltHandler(const ExpressionCase *c, Module &m,
         "case_alt_" + scrutinee);
     BasicBlock *Entry = BasicBlock::Create(m.getContext(), "entry", handler);
     builder.SetInsertPoint(Entry);
+
+    // We can only handle one alt :)
+    assert(c->alts_size() == 1);
+    for (CaseAlt *a : c->alts_range()) {
+        if(CaseAltDestructure *d = dyn_cast<CaseAltDestructure>(a)) {
+
+        }
+        else {
+            assert(false && "unimplemented.");
+        }
+    }
     builder.CreateRetVoid();
     return handler;
 }
 
-// case over an identifier
-void materializeCaseIdent(const ExpressionCase *c, Module &m,
+// case over a constructor. Note: this is a HACK, this is not how you should
+// find out what this is. The correct thing to to is to look at the type
+// signature of the scrutinee and then decide what is supposed to happen.
+// Right now, I'm only interested in getting my stuff working which is why
+// I'm doing it this way.
+void materializeCaseConstructor(const ExpressionCase *c, Module &m,
                           StgIRBuilder &builder, BuildCtx &bctx) {
-    // NOTE: save insert BB because materializeCaseIdentAltHandler changes this.
+    // NOTE: save insert BB because materializeCaseConstructorAlt changes this.
     BasicBlock *BB = builder.GetInsertBlock();
 
     const Identifier scrutinee = cast<AtomIdent>(c->getScrutinee())->getIdent();
     // TODO: come up with a notion of scope.
     Function *Next = bctx.getFunctionFromName(scrutinee);
     // push a return continuation for the function `Next` to follow.
-    Function *AltHandler = materializeCaseIdentAltHandler(c, m, builder, bctx);
+    Function *AltHandler = materializeCaseConstructorAlt(c, m, builder, bctx);
 
     builder.SetInsertPoint(BB);
     builder.CreateCall(bctx.pushReturnCont, {AltHandler});
@@ -283,7 +298,7 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
     if (isa<AtomInt>(c->getScrutinee())) {
         assert(false && "primitive case unimplemented");
     } else {
-        materializeCaseIdent(c, m, builder, bctx);
+        materializeCaseConstructor(c, m, builder, bctx);
     }
 }
 

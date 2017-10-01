@@ -195,7 +195,7 @@ class CaseAlt {
     friend std::ostream &operator<<(std::ostream &os, const CaseAlt &a);
     virtual void print(std::ostream &os) const = 0;
 
-    enum CaseAltKind { CAK_Int, CAK_Variable };
+    enum CaseAltKind { CAK_Int, CAK_Variable, CAK_Destructure };
     CaseAltKind getKind() const { return kind; }
 
    private:
@@ -230,6 +230,34 @@ class CaseAltVariable : public CaseAlt {
     void print(std::ostream &os) const;
 };
 
+// case * of { __Constrcutor x y z -> f(x, y, z) }
+class CaseAltDestructure : public CaseAlt {
+   public:
+    using VariableList = SmallVector<Identifier, 4>;
+    using iterator = VariableList::iterator;
+    using const_iterator = VariableList::const_iterator;
+
+   private:
+    ConstructorName constructorName;
+    VariableList vars;
+
+   public:
+    CaseAltDestructure(ConstructorName constructorName, ArrayRef<Identifier> varsref, Expression *rhs) : CaseAlt(CAK_Destructure, rhs), constructorName(constructorName) {
+        for(Identifier var : varsref)
+            vars.push_back(var);
+    }
+
+    const_iterator begin() const { return vars.begin(); } 
+    const_iterator end() const { return vars.end(); }
+    iterator_range<const_iterator> variables_range() const {
+        return make_range(begin(), end());
+    }
+    static bool classof(const CaseAlt *a) {
+        return a->getKind() == CaseAlt::CAK_Destructure;
+    }
+    void print(std::ostream &os) const;
+};
+
 // *** Case *** //
 class ExpressionCase : public Expression {
    public:
@@ -259,6 +287,7 @@ class ExpressionCase : public Expression {
 
     const_iterator alts_begin() const { return alts.begin(); }
     const_iterator alts_end() const { return alts.end(); }
+    size_t alts_size() const { return alts.size(); }
 
     iterator_range<const_iterator> alts_range() const {
         return make_range(alts_begin(), alts_end());

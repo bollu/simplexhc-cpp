@@ -29,6 +29,8 @@ std::vector<Parameter *> g_params;
 std::vector<std::string *>g_types;
 stg::Program *g_program;
 
+std::vector<Identifier> g_alt_destructure_vars;
+
 
 void add_atom_to_list (Atom *a) {
   g_atoms.push_back(a);
@@ -89,6 +91,7 @@ void add_param_to_list(Parameter *p) {
 %type <alt> alt;
 %type <alt> altint;
 %type <alt> altvar;
+%type <alt> altdestructure;
 
 %type <UNDEF> atomlist;
 
@@ -134,11 +137,12 @@ atoms_:
 
 atomlist: OPENPAREN atoms_ CLOSEPAREN | OPENPAREN CLOSEPAREN
 
+// Alternates
 altlist: altlist alt { add_alt_to_list($2); }
          | alt SEMICOLON { add_alt_to_list($1); }
+
 alt: 
-   altint | altvar
-   //altint | altconstructor | altdefault
+   altint | altvar | altdestructure
 
 altint: 
       ATOMINT THINARROW expr { $$ = new stg::CaseAltInt(cast<AtomInt>($1), $3); }
@@ -146,6 +150,29 @@ altint:
 altvar:
       ATOMSTRING THINARROW expr { $$ = new stg::CaseAltVariable(cast<AtomIdent>($1)->getIdent(), $3); }
 
+// Note that we need a mid rule action so that we reserve the atoms
+// consumed so far. Otherwise, expr will take all the atoms.
+// case * of (Int (x y) -> print (z))
+// would be parsed as:
+// case * of (Int () -> print (x y z)
+altdestructure: 
+    CONSTRUCTORNAME atomlist {
+     for(Atom *a : g_atoms) {
+        g_alt_destructure_vars.push_back(cast<AtomIdent>(a)->getIdent());
+     }
+     g_atoms.clear();
+
+    } THINARROW expr {
+      // NOTE: the middle block is considered as a "marker". So, it's $3, NOT 
+      // THINARROW.
+      // Wish the docs were clearer about this.
+      $$ = new stg::CaseAltDestructure(*$1, g_alt_destructure_vars, $5);
+      g_alt_destructure_vars.clear();
+      g_atoms.clear();
+      delete $1;
+    }
+
+// Parameters
 param:
   ATOMSTRING COLON CONSTRUCTORNAME { $$ = new stg::Parameter(cast<AtomIdent>($1)->getIdent(), *$3)}
 
@@ -167,7 +194,10 @@ lambda:
 expr:
   // function application
   ATOMSTRING atomlist { $$ = new stg::ExpressionAp(cast<AtomIdent>($1)->getIdent(), g_atoms);
-                        g_atoms.clear();}
+                        g_atoms.clear();
+
+                        cout << "Ap: " << *$$ << "\n";
+                        }
   | CONSTRUCTORNAME atomlist { 
     $$ = new stg::ExpressionConstructor(*$1, g_atoms);
     g_atoms.clear();

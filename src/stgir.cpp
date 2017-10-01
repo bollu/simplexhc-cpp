@@ -15,6 +15,20 @@ void printSepBy(std::ostream &os, std::string prefix, ArrayRef<T *> ts, std::str
   }
   os << postfix;
 }
+
+template<typename T>
+void printSepBy(std::ostream &os, std::string prefix, ArrayRef<T> ts, std::string separator, std::string postfix) {
+  os << prefix;
+
+  for(int i = 0; i < ts.size(); i++) {
+    os << ts[i];
+    if (i < (int)ts.size() - 2) {
+      os << separator;
+    }
+
+  }
+  os << postfix;
+}
 // DataDeclaration
 void DataDeclaration::print(std::ostream &os) const {
   os << "data ";
@@ -102,6 +116,12 @@ void CaseAltInt::print(std::ostream &os) const {
 
 void CaseAltVariable::print(std::ostream &os) const {
     os << lhs << " -> " << *rhs << "\n";
+}
+
+void CaseAltDestructure::print(std::ostream &os) const {
+    os << constructorName;
+    printSepBy(os, "(", (ArrayRef<Identifier>)vars, " ", ")");
+    os  << " -> " << *rhs << "\n";
 }
 
 // Binding
