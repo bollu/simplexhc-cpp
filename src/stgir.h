@@ -12,40 +12,46 @@ using Identifier = std::string;
 using ConstructorName = std::string;
 using TypeName = std::string;
 
-
 // *** Data declaration
 class DataDeclaration {
-public:
+   public:
     using TypeList = SmallVector<TypeName *, 4>;
-private:
+
+   private:
     ConstructorName name;
     TypeList types;
-public:
-    DataDeclaration(ConstructorName name, ArrayRef<TypeName *> typesref) : name(name) {
-        for(TypeName *t : typesref) {
+
+   public:
+    DataDeclaration(ConstructorName name, ArrayRef<TypeName *> typesref)
+        : name(name) {
+        for (TypeName *t : typesref) {
             types.push_back(t);
         }
     }
     ConstructorName getName() const { return name; }
 
-  using iterator = TypeList::iterator;
-  using const_iterator = TypeList::const_iterator;
+    using iterator = TypeList::iterator;
+    using const_iterator = TypeList::const_iterator;
 
-  iterator types_begin() { return types.begin(); }
-  iterator types_end() { return types.end(); }
+    iterator types_begin() { return types.begin(); }
+    iterator types_end() { return types.end(); }
 
-  const_iterator types_begin() const { return types.begin(); }
-  const_iterator types_end() const { return types.end(); }
+    const_iterator types_begin() const { return types.begin(); }
+    const_iterator types_end() const { return types.end(); }
 
-  iterator_range<iterator> types_range() { return make_range<iterator>(types_begin(), types_end()); };
-  iterator_range<const_iterator> types_range() const { return make_range<const_iterator>(types_begin(), types_end()); };
+    iterator_range<iterator> types_range() {
+        return make_range<iterator>(types_begin(), types_end());
+    };
+    iterator_range<const_iterator> types_range() const {
+        return make_range<const_iterator>(types_begin(), types_end());
+    };
 
-  size_t types_size() const { return types.size(); }
-  bool types_empty() const { return types.empty(); }
+    size_t types_size() const { return types.size(); }
+    bool types_empty() const { return types.empty(); }
 
-  void print(std::ostream &os) const;
-  friend std::ostream &operator <<(std::ostream &os, const DataDeclaration &decl);
-
+    void print(std::ostream &os) const;
+    friend std::ostream &operator<<(std::ostream &os,
+                                    const DataDeclaration &decl);
 };
 
 // *** Atom ***
@@ -138,13 +144,13 @@ class ExpressionAp : public Expression {
    private:
     Identifier fn;
     ParamsTy args;
-
 };
 
 class ExpressionConstructor : public Expression {
-    public:
-        using ArgsTy = SmallVector<Atom *, 2>;
-    private:
+   public:
+    using ArgsTy = SmallVector<Atom *, 2>;
+
+   private:
     ConstructorName name;
     SmallVector<Atom *, 2> args;
 
@@ -154,12 +160,16 @@ class ExpressionConstructor : public Expression {
 
     iterator args_begin() { return args.begin(); }
     const_iterator args_begin() const { return args.begin(); }
-    
+
     iterator args_end() { return args.end(); }
     const_iterator args_end() const { return args.end(); }
 
-    iterator_range<iterator> args_range() { return make_range(args_begin(), args_end()); }
-    iterator_range<const_iterator> args_range() const { return make_range(args_begin(), args_end()); }
+    iterator_range<iterator> args_range() {
+        return make_range(args_begin(), args_end());
+    }
+    iterator_range<const_iterator> args_range() const {
+        return make_range(args_begin(), args_end());
+    }
 
     ExpressionConstructor(ConstructorName name,
                           std::initializer_list<Atom *> args)
@@ -179,22 +189,32 @@ class ExpressionConstructor : public Expression {
 
 // *** Alt ***
 class CaseAlt {
-   protected:
-    Expression *rhs;
-    CaseAlt(Expression *rhs) : rhs(rhs){};
-
    public:
     Expression *getRHS() { return rhs; }
 
     friend std::ostream &operator<<(std::ostream &os, const CaseAlt &a);
     virtual void print(std::ostream &os) const = 0;
+
+    enum CaseAltKind { CAK_Int, CAK_Variable };
+    CaseAltKind getKind() const { return kind; }
+
+   private:
+    CaseAltKind kind;
+
+   protected:
+    Expression *rhs;
+    CaseAlt(CaseAltKind kind, Expression *rhs) : kind(kind), rhs(rhs){};
 };
 
 class CaseAltInt : public CaseAlt {
     AtomInt *lhs;
 
    public:
-    CaseAltInt(AtomInt *lhs, Expression *rhs) : CaseAlt(rhs), lhs(lhs){};
+    CaseAltInt(AtomInt *lhs, Expression *rhs)
+        : CaseAlt(CAK_Int, rhs), lhs(lhs){};
+    static bool classof(const CaseAlt *a) {
+        return a->getKind() == CaseAlt::CAK_Int;
+    }
     void print(std::ostream &os) const;
 };
 
@@ -202,15 +222,20 @@ class CaseAltVariable : public CaseAlt {
     Identifier lhs;
 
    public:
-    CaseAltVariable(Identifier lhs, Expression *rhs) : CaseAlt(rhs), lhs(lhs){};
+    CaseAltVariable(Identifier lhs, Expression *rhs)
+        : CaseAlt(CAK_Variable, rhs), lhs(lhs){};
+    static bool classof(const CaseAlt *a) {
+        return a->getKind() == CaseAlt::CAK_Variable;
+    }
     void print(std::ostream &os) const;
 };
 
 // *** Case *** //
 class ExpressionCase : public Expression {
- public:
-  using AltsList = SmallVector<CaseAlt *, 2>;
- private:
+   public:
+    using AltsList = SmallVector<CaseAlt *, 2>;
+
+   private:
     Atom *scrutinee;
     AltsList alts;
 
@@ -230,33 +255,42 @@ class ExpressionCase : public Expression {
     const Atom *getScrutinee() const { return scrutinee; }
 
     using iterator = AltsList::iterator;
+    using const_iterator = AltsList::const_iterator;
+
+    const_iterator alts_begin() const { return alts.begin(); }
+    const_iterator alts_end() const { return alts.end(); }
+
+    iterator_range<const_iterator> alts_range() const {
+        return make_range(alts_begin(), alts_end());
+    }
 };
 
 // *** Parameter ***
 class Parameter {
     Identifier name;
     TypeName type;
-public:
-    Parameter(Identifier name, TypeName type) : name(name), type(type) {};
+
+   public:
+    Parameter(Identifier name, TypeName type) : name(name), type(type){};
     void print(std::ostream &os) const;
     friend std::ostream &operator<<(std::ostream &os, const Parameter &p);
-
 };
 
 // *** Lambda ***
 class Lambda {
-public:
+   public:
     using ParamList = SmallVector<Parameter *, 4>;
     TypeName returnType;
-private:
+
+   private:
     ParamList params;
     Expression *expr;
-public:
-    Lambda(ArrayRef<Parameter *> paramsref,
-           TypeName returnType,
-           Expression *expr) : 
-    expr(expr), returnType(returnType) {
-        for(Parameter *p : paramsref) {
+
+   public:
+    Lambda(ArrayRef<Parameter *> paramsref, TypeName returnType,
+           Expression *expr)
+        : expr(expr), returnType(returnType) {
+        for (Parameter *p : paramsref) {
             params.push_back(p);
         }
     }
@@ -282,7 +316,6 @@ public:
 
     const Parameter *back() const { return params.back(); }
     Parameter *back() { return params.back(); }
-
 };
 
 // *** Binding ***
@@ -300,7 +333,7 @@ class Binding {
 // *** Program ***
 class Program {
    public:
-    Program(ArrayRef<Binding *> bs, ArrayRef<DataDeclaration *>ds ) {
+    Program(ArrayRef<Binding *> bs, ArrayRef<DataDeclaration *> ds) {
         for (Binding *b : bs) bindings.push_back(b);
         for (DataDeclaration *d : ds) declarations.push_back(d);
     };
@@ -315,7 +348,6 @@ class Program {
 
     binding_iterator bindings_begin() { return bindings.begin(); }
     binding_iterator bindings_end() { return bindings.end(); }
-
 
     iterator_range<binding_iterator> bindings_range() {
         return make_range(bindings_begin(), bindings_end());
