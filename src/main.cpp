@@ -200,7 +200,7 @@ Value *materializeAtom(const AtomInt *i, StgIRBuilder &builder) {
     return builder.getInt64(i->getVal());
 }
 
-void materializeExpr(const ExpressionAp *ap, Module &m, StgIRBuilder &builder,
+void materializeAp(const ExpressionAp *ap, Module &m, StgIRBuilder &builder,
                      BuildCtx &bctx) {
     for (Atom *p : *ap) {
         AtomInt *i = cast<AtomInt>(p);
@@ -212,7 +212,7 @@ void materializeExpr(const ExpressionAp *ap, Module &m, StgIRBuilder &builder,
     }
 };
 
-void materializeExpr(const ExpressionConstructor *c, Module &m,
+void materializeConstructor(const ExpressionConstructor *c, Module &m,
                      StgIRBuilder &builder, BuildCtx &bctx) {
     int TotalSize = 0;
     for (Atom *a : c->args_range()) {
@@ -241,17 +241,41 @@ void materializeExpr(const ExpressionConstructor *c, Module &m,
     Value *memAddr =
         builder.CreatePtrToInt(typedMem, builder.getInt64Ty(), "memaddr");
     builder.CreateCall(bctx.pushInt, {memAddr});
+
+    // now pop a continuation off the return stack and invoke it
+    CallInst *ReturnCont = builder.CreateCall(bctx.popReturnCont, {}, "returncont");
+    CreateTailCall(builder, ReturnCont, {});
 };
+
+// materialize alternate handling of case `ident` of ...)
+Function *materializeCaseIdentAltHandler(const ExpressionCase *c, Module &m,
+                                         StgIRBuilder &builder,
+                                         BuildCtx &bctx) {
+    const Identifier scrutinee = cast<AtomIdent>(c->getScrutinee())->getIdent();
+    Function *handler = getOrCreateFunction(
+        m, FunctionType::get(builder.getVoidTy(), {}, /*isVarArg=*/false),
+        "case_alt_" + scrutinee);
+    BasicBlock *Entry = BasicBlock::Create(m.getContext(), "entry", handler);
+    builder.SetInsertPoint(Entry);
+    builder.CreateRetVoid();
+    return handler;
+}
 
 // case over an identifier
 void materializeCaseIdent(const ExpressionCase *c, Module &m,
                           StgIRBuilder &builder, BuildCtx &bctx) {
+    // NOTE: save insert BB because materializeCaseIdentAltHandler changes this.
+    BasicBlock *BB = builder.GetInsertBlock();
+
     const Identifier scrutinee = cast<AtomIdent>(c->getScrutinee())->getIdent();
     // TODO: come up with a notion of scope.
     Function *Next = bctx.getFunctionFromName(scrutinee);
-    CreateTailCall(builder, Next, {});
     // push a return continuation for the function `Next` to follow.
-    //bctx.pushCont(
+    Function *AltHandler = materializeCaseIdentAltHandler(c, m, builder, bctx);
+
+    builder.SetInsertPoint(BB);
+    builder.CreateCall(bctx.pushReturnCont, {AltHandler});
+    CreateTailCall(builder, Next, {});
 }
 
 void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
@@ -267,10 +291,10 @@ void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
                      BuildCtx &bctx) {
     switch (e->getKind()) {
         case Expression::EK_Ap:
-            materializeExpr(cast<ExpressionAp>(e), m, builder, bctx);
+            materializeAp(cast<ExpressionAp>(e), m, builder, bctx);
             break;
         case Expression::EK_Cons:
-            materializeExpr(cast<ExpressionConstructor>(e), m, builder, bctx);
+            materializeConstructor(cast<ExpressionConstructor>(e), m, builder, bctx);
             break;
         case Expression::EK_Case:
             materializeCase(cast<ExpressionCase>(e), m, builder, bctx);
