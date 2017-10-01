@@ -7,12 +7,12 @@
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Verifier.h"
 #include "stgir.h"
-#include "llvm/IR/Instructions.h"
 
 using namespace std;
 using namespace stg;
@@ -40,7 +40,6 @@ struct BuildCtx {
     using BindingMapTy = std::map<Binding *, Function *>;
 
     using TypeMapTy = std::map<ConstructorName, Type *>;
-
 
     Function *printInt, *popInt, *pushInt, *malloc;
     GlobalVariable *stackPrim;
@@ -158,7 +157,6 @@ struct BuildCtx {
         builder.CreateStore(idx, stackPrimTop);
         builder.CreateRet(Ret);
     }
-
 };
 
 Value *materializeAtom(const AtomInt *i, StgIRBuilder &builder) {
@@ -192,19 +190,20 @@ void materializeExpr(const ExpressionConstructor *c, Module &m,
         builder.CreateBitCast(rawMem, structType->getPointerTo(), "typedmem");
     // Push values into the constructed value
     unsigned i = 0;
-    for(Atom *a : c->args_range()) {
+    for (Atom *a : c->args_range()) {
         AtomInt *ai = cast<AtomInt>(a);
-        std::vector<Value*> idxs = {builder.getInt64(0), builder.getInt32(0)};
-        Value *indexedMem = builder.CreateGEP(typedMem, idxs, "indexedmem_" + std::to_string(i));
+        std::vector<Value *> idxs = {builder.getInt64(0), builder.getInt32(0)};
+        Value *indexedMem = builder.CreateGEP(
+            typedMem, idxs, "indexedmem_" + std::to_string(i));
 
         Value *v = materializeAtom(ai, builder);
         v->setName("param_" + std::to_string(i));
         builder.CreateStore(v, indexedMem);
         i++;
     }
-    Value *memAddr = builder.CreatePtrToInt(typedMem, builder.getInt64Ty(), "memaddr");
+    Value *memAddr =
+        builder.CreatePtrToInt(typedMem, builder.getInt64Ty(), "memaddr");
     builder.CreateCall(bctx.pushInt, {memAddr});
-
 };
 
 void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,

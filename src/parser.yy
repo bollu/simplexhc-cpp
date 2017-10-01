@@ -88,6 +88,7 @@ void add_param_to_list(Parameter *p) {
 %type <UNDEF> altlist;
 %type <alt> alt;
 %type <alt> altint;
+%type <alt> altvar;
 
 %type <UNDEF> atomlist;
 
@@ -136,11 +137,14 @@ atomlist: OPENPAREN atoms_ CLOSEPAREN | OPENPAREN CLOSEPAREN
 altlist: altlist alt { add_alt_to_list($2); }
          | alt SEMICOLON { add_alt_to_list($1); }
 alt: 
-   altint
+   altint | altvar
    //altint | altconstructor | altdefault
 
 altint: 
       ATOMINT THINARROW expr { $$ = new stg::CaseAltInt(cast<AtomInt>($1), $3); }
+
+altvar:
+      ATOMSTRING THINARROW expr { $$ = new stg::CaseAltVariable(cast<AtomIdent>($1)->getIdent(), $3); }
 
 param:
   ATOMSTRING COLON CONSTRUCTORNAME { $$ = new stg::Parameter(cast<AtomIdent>($1)->getIdent(), *$3)}

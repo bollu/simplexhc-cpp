@@ -99,6 +99,11 @@ void CaseAltInt::print(std::ostream &os) const {
     os << *lhs << " -> " << *rhs << "\n";
 }
 
+
+void CaseAltVariable::print(std::ostream &os) const {
+    os << lhs << " -> " << *rhs << "\n";
+}
+
 // Binding
  std::ostream &stg::operator<<(std::ostream &os, const Binding &b) {
     os << "define " << b.lhs << " = " << *b.rhs;

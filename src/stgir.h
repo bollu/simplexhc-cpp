@@ -198,6 +198,17 @@ class CaseAltInt : public CaseAlt {
     void print(std::ostream &os) const;
 };
 
+class CaseAltVariable : public CaseAlt {
+    Identifier lhs;
+
+   public:
+    CaseAltVariable(Identifier lhs, Expression *rhs) : CaseAlt(rhs), lhs(lhs){};
+    void print(std::ostream &os) const;
+};
+
+// *** Case *** //
+
+
 class ExpressionCase : public Expression {
     Atom *scrutinee;
     SmallVector<CaseAlt *, 2> alts;
