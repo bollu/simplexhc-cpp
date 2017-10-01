@@ -6,7 +6,7 @@ set(CMAKE_CXX_FLAGS "-fdiagnostics-color=always -fno-rtti")
 
 # LLVM
 find_package(LLVM REQUIRED)
-llvm_map_components_to_libnames(LLVM_LIBS Core Support)
+llvm_map_components_to_libnames(LLVM_LIBS Core Support Bitwriter)
 
 # FLEX AND BISON
 find_package(BISON)

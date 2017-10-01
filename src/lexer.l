@@ -18,7 +18,7 @@ extern stg::Program *g_program;
 int g_lexer_line_num = 1;
 int g_lexer_success = 1;
 
-int compile_program(stg::Program *p);
+int compile_program(stg::Program *p, int argc, char **argv);
 %}
 
 
@@ -61,12 +61,12 @@ int yywrap(void) {
     return 1;
 }
 
-int main(void) {
+int main(int argc, char **argv) {
     do {
         yyparse();
     } while (!feof(yyin));
     if (g_lexer_success) {
-        return compile_program(g_program);
+        return compile_program(g_program, argc, argv);
     }else {
         return 1;
     }

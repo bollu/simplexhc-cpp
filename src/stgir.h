@@ -39,6 +39,10 @@ class DataDeclaration {
     const_iterator types_begin() const { return types.begin(); }
     const_iterator types_end() const { return types.end(); }
 
+    const TypeName *getTypeName(size_t i) const {
+        return types[i];
+    }
+
     iterator_range<iterator> types_range() {
         return make_range<iterator>(types_begin(), types_end());
     };
@@ -252,10 +256,14 @@ class CaseAltDestructure : public CaseAlt {
     iterator_range<const_iterator> variables_range() const {
         return make_range(begin(), end());
     }
+
+    size_t variables_size() const { return vars.size(); }
     static bool classof(const CaseAlt *a) {
         return a->getKind() == CaseAlt::CAK_Destructure;
     }
     void print(std::ostream &os) const;
+
+    ConstructorName getConstructorName() const { return constructorName; }
 };
 
 // *** Case *** //
