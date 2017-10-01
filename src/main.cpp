@@ -77,14 +77,14 @@ struct BuildCtx {
                               {builder.getInt64Ty()}, false),
             "malloc");
         // *** Int ***
-        addStack(m, builder, builder.getInt64Ty(), "Int", stackSize,
-                pushInt, popInt, stackInt, stackIntTop);
-
+        addStack(m, builder, builder.getInt64Ty(), "Int", stackSize, pushInt,
+                 popInt, stackInt, stackIntTop);
 
         // type of returns.
-        ReturnContTy =  FunctionType::get(builder.getVoidTy(), {}, /*isVarArg=*/false);
-        addStack(m, builder,ReturnContTy, "Return", stackSize,
-                pushReturnCont, popReturnCont, stackReturnCont, stackReturnContTop);
+        ReturnContTy =
+            FunctionType::get(builder.getVoidTy(), {}, /*isVarArg=*/false)->getPointerTo();
+        addStack(m, builder, ReturnContTy, "Return", stackSize, pushReturnCont,
+                 popReturnCont, stackReturnCont, stackReturnContTop);
 
         // *** Return */
     }
@@ -132,18 +132,18 @@ struct BuildCtx {
                          Function *&popFn, GlobalVariable *&stack,
                          GlobalVariable *&stackTop) {
         popFn = getOrCreateFunction(
-            m, FunctionType::get(builder.getInt64Ty(), /*isVarArg=*/false),
+            m, FunctionType::get(elemTy, /*isVarArg=*/false),
             "pop" + name);
         pushFn = getOrCreateFunction(
             m,
-            FunctionType::get(builder.getVoidTy(), {builder.getInt64Ty()},
+            FunctionType::get(builder.getVoidTy(), {elemTy},
                               /*isVarArg=*/false),
             "push" + name);
-        Type *stackTy = ArrayType::get(builder.getInt64Ty(), size);
+        Type *stackTy = ArrayType::get(elemTy, size);
         // Constant *Init = ConstantAggregateZero::get(stackTy);
         stack = new GlobalVariable(m, stackTy, /*isConstant=*/false,
-                                   GlobalValue::ExternalLinkage, /*Initializer=*/nullptr,
-                                   "stack" + name);
+                                   GlobalValue::ExternalLinkage,
+                                   /*Initializer=*/nullptr, "stack" + name);
 
         stackTop = new GlobalVariable(
             m, builder.getInt64Ty(), /*isConstant=*/false,
