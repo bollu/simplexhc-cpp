@@ -27,11 +27,20 @@ using StgIRBuilder = IRBuilder<>;
 
 // Get a function with name `name`, and if it doesn't exist, create
 // a function with name `name`, type `FTy`, module `m`.
-Function *getOrCreateFunction(Module &m, FunctionType *FTy, std::string name) {
+static Function *getOrCreateFunction(Module &m, FunctionType *FTy,
+                                     std::string name) {
     Function *F = m.getFunction(name);
     if (F) return F;
 
     return Function::Create(FTy, GlobalValue::ExternalLinkage, name, &m);
+}
+
+static CallInst *CreateTailCall(StgIRBuilder &builder, Value *Fn,
+                                ArrayRef<Value *> Args,
+                                const Twine &Name = "") {
+    CallInst *Call = builder.CreateCall(Fn, Args, Name);
+    Call->setTailCallKind(CallInst::TCK_MustTail);
+    return Call;
 }
 
 static const int stackSize = 5000;
@@ -41,9 +50,18 @@ struct BuildCtx {
 
     using TypeMapTy = std::map<ConstructorName, Type *>;
 
-    Function *printInt, *popInt, *pushInt, *malloc;
-    GlobalVariable *stackPrim;
-    GlobalVariable *stackPrimTop;
+    Function *printInt, *popInt, *pushInt;
+    Function *malloc;
+    Function *pushReturnCont, *popReturnCont;
+    GlobalVariable *stackInt;
+    GlobalVariable *stackIntTop;
+
+    // type of values in return stack: () -> ()
+    Type *ReturnContTy;
+    // stack of return values, in reality a large array
+    GlobalVariable *stackReturnCont;
+    // pointer to offset to top of return stack.
+    GlobalVariable *stackReturnContTop;
 
     BuildCtx(Module &m, StgIRBuilder &builder) {
         populateIntrinsicTypes(m, builder, typemap);
@@ -53,32 +71,22 @@ struct BuildCtx {
                                                          /*isVarArg=*/false),
                                        "printInt");
 
-        popInt = getOrCreateFunction(
-            m, FunctionType::get(builder.getInt64Ty(), /*isVarArg=*/false),
-            "popInt");
-        pushInt = getOrCreateFunction(
-            m,
-            FunctionType::get(builder.getVoidTy(), {builder.getInt64Ty()},
-                              /*isVarArg=*/false),
-            "pushInt");
-        Type *stackPrimTy = ArrayType::get(builder.getInt64Ty(), stackSize);
-        Constant *stackPrimInit = ConstantAggregateZero::get(stackPrimTy);
-        stackPrim = new GlobalVariable(m, stackPrimTy, /*isConstant=*/false,
-                                       GlobalValue::ExternalLinkage,
-                                       stackPrimInit, "stackPrim");
-
         malloc = getOrCreateFunction(
             m,
             FunctionType::get(builder.getInt8Ty()->getPointerTo(),
                               {builder.getInt64Ty()}, false),
             "malloc");
+        // *** Int ***
+        addStack(m, builder, builder.getInt64Ty(), "Int", stackSize,
+                pushInt, popInt, stackInt, stackIntTop);
 
-        stackPrimTop = new GlobalVariable(
-            m, builder.getInt64Ty(), /*isConstant=*/false,
-            GlobalValue::ExternalLinkage,
-            ConstantInt::get(builder.getInt64Ty(), 0), "stackPrimTop");
-        addPushIntToModule(m, builder);
-        addPopIntToModule(m, builder);
+
+        // type of returns.
+        ReturnContTy =  FunctionType::get(builder.getVoidTy(), {}, /*isVarArg=*/false);
+        addStack(m, builder,ReturnContTy, "Return", stackSize,
+                pushReturnCont, popReturnCont, stackReturnCont, stackReturnContTop);
+
+        // *** Return */
     }
 
     void insertBinding(Binding *b, Function *f) { bindingmap[b] = f; }
@@ -119,42 +127,71 @@ struct BuildCtx {
         map["PrimInt"] = builder.getInt64Ty();
     }
 
-    void addPushIntToModule(Module &m, StgIRBuilder &builder) {
-        assert(pushInt);
-        assert(stackPrimTop);
-        assert(stackPrim);
+    static void addStack(Module &m, StgIRBuilder &builder, Type *elemTy,
+                         std::string name, size_t size, Function *&pushFn,
+                         Function *&popFn, GlobalVariable *&stack,
+                         GlobalVariable *&stackTop) {
+        popFn = getOrCreateFunction(
+            m, FunctionType::get(builder.getInt64Ty(), /*isVarArg=*/false),
+            "pop" + name);
+        pushFn = getOrCreateFunction(
+            m,
+            FunctionType::get(builder.getVoidTy(), {builder.getInt64Ty()},
+                              /*isVarArg=*/false),
+            "push" + name);
+        Type *stackTy = ArrayType::get(builder.getInt64Ty(), size);
+        // Constant *Init = ConstantAggregateZero::get(stackTy);
+        stack = new GlobalVariable(m, stackTy, /*isConstant=*/false,
+                                   GlobalValue::ExternalLinkage, /*Initializer=*/nullptr,
+                                   "stack" + name);
 
-        BasicBlock *entry =
-            BasicBlock::Create(m.getContext(), "entry", pushInt);
+        stackTop = new GlobalVariable(
+            m, builder.getInt64Ty(), /*isConstant=*/false,
+            GlobalValue::ExternalLinkage,
+            ConstantInt::get(builder.getInt64Ty(), 0), "stack" + name + "Top");
+
+        addPushToModule(m, builder, pushFn, stackTop, stack);
+        addPopToModule(m, builder, popFn, stackTop, stack);
+    }
+
+    static void addPushToModule(Module &m, StgIRBuilder &builder, Function *F,
+                                Value *stackTop, Value *stack) {
+        assert(F);
+        assert(stackTop);
+        assert(stack);
+
+        BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
         builder.SetInsertPoint(entry);
-        for (Argument &arg : pushInt->args()) {
+        // pushInt has only one argument
+        for (Argument &arg : F->args()) {
             arg.setName("i");
-            Value *idx = builder.CreateLoad(stackPrimTop, "idx");
-            Value *stackSlot = builder.CreateGEP(
-                stackPrim, {builder.getInt64(0), idx}, "slot");
+            Value *idx = builder.CreateLoad(stackTop, "idx");
+            Value *stackSlot =
+                builder.CreateGEP(stack, {builder.getInt64(0), idx}, "slot");
             builder.CreateStore(&arg, stackSlot);
 
             idx = builder.CreateAdd(idx, builder.getInt64(1), "idx_inc");
-            builder.CreateStore(idx, stackPrimTop);
+            builder.CreateStore(idx, stackTop);
             builder.CreateRetVoid();
         }
     }
 
-    void addPopIntToModule(Module &m, StgIRBuilder &builder) {
-        assert(popInt);
-        assert(stackPrimTop);
-        assert(stackPrim);
+    static void addPopToModule(Module &m, StgIRBuilder &builder, Function *F,
+                               Value *stackTop, Value *stack) {
+        assert(F);
+        assert(stackTop);
+        assert(stack);
 
-        BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", popInt);
+        BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
         builder.SetInsertPoint(entry);
 
-        Value *idx = builder.CreateLoad(stackPrimTop, "idx");
+        Value *idx = builder.CreateLoad(stackTop, "idx");
         idx = builder.CreateSub(idx, builder.getInt64(1), "idx_dec");
         Value *stackSlot =
-            builder.CreateGEP(stackPrim, {builder.getInt64(0), idx}, "slot");
+            builder.CreateGEP(stack, {builder.getInt64(0), idx}, "slot");
         Value *Ret = builder.CreateLoad(stackSlot, "val");
 
-        builder.CreateStore(idx, stackPrimTop);
+        builder.CreateStore(idx, stackTop);
         builder.CreateRet(Ret);
     }
 };
@@ -206,6 +243,26 @@ void materializeExpr(const ExpressionConstructor *c, Module &m,
     builder.CreateCall(bctx.pushInt, {memAddr});
 };
 
+// case over an identifier
+void materializeCaseIdent(const ExpressionCase *c, Module &m,
+                          StgIRBuilder &builder, BuildCtx &bctx) {
+    const Identifier scrutinee = cast<AtomIdent>(c->getScrutinee())->getIdent();
+    // TODO: come up with a notion of scope.
+    Function *Next = bctx.getFunctionFromName(scrutinee);
+    CreateTailCall(builder, Next, {});
+    // push a return continuation for the function `Next` to follow.
+    //bctx.pushCont(
+}
+
+void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
+                     BuildCtx &bctx) {
+    if (isa<AtomInt>(c->getScrutinee())) {
+        assert(false && "primitive case unimplemented");
+    } else {
+        materializeCaseIdent(c, m, builder, bctx);
+    }
+}
+
 void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
                      BuildCtx &bctx) {
     switch (e->getKind()) {
@@ -216,7 +273,7 @@ void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
             materializeExpr(cast<ExpressionConstructor>(e), m, builder, bctx);
             break;
         case Expression::EK_Case:
-            assert(false && "unimplemented");
+            materializeCase(cast<ExpressionCase>(e), m, builder, bctx);
             break;
     };
 }

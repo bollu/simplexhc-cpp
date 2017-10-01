@@ -207,11 +207,12 @@ class CaseAltVariable : public CaseAlt {
 };
 
 // *** Case *** //
-
-
 class ExpressionCase : public Expression {
+ public:
+  using AltsList = SmallVector<CaseAlt *, 2>;
+ private:
     Atom *scrutinee;
-    SmallVector<CaseAlt *, 2> alts;
+    AltsList alts;
 
    public:
     ExpressionCase(Atom *scrutinee, ArrayRef<CaseAlt *> altsref)
@@ -225,6 +226,10 @@ class ExpressionCase : public Expression {
     static bool classof(const Expression *E) {
         return E->getKind() == Expression::EK_Case;
     }
+    Atom *getScrutinee() { return scrutinee; }
+    const Atom *getScrutinee() const { return scrutinee; }
+
+    using iterator = AltsList::iterator;
 };
 
 // *** Parameter ***
