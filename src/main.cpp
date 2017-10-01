@@ -2,6 +2,7 @@
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -13,13 +14,11 @@
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/FileSystem.h"
-#include "llvm/Bitcode/BitcodeWriter.h"
 #include "stgir.h"
 
 using namespace std;
 using namespace stg;
 using namespace llvm;
-
 
 class BuildCtx;
 
@@ -50,10 +49,84 @@ static CallInst *CreateTailCall(StgIRBuilder &builder, Value *Fn,
     return Call;
 }
 
+template <typename K, typename V>
+class Scope {
+   public:
+    using MapTy = std::map<K, V>;
+    using iterator = typename MapTy::iterator;
+    using const_iterator = typename MapTy::const_iterator;
+
+   private:
+    MapTy m;
+    Optional<Scope<K, V> *> inner;
+
+   public:
+    Scope() : inner(None) {};
+
+    void insert(K k, V v) {
+        if (inner)
+            inner.getValue()->insert(k, v);
+        else {
+            assert(m.find(k) == m.end());
+            m[k] = v;
+        }
+    }
+
+    iterator end() { return m.end(); }
+    const_iterator end() const { return m.end(); }
+
+
+    // If our inner scope has this value, give it. Otherwise, default
+    // and give what we have.
+    // TODO: find a way to reduce code duplication b/w the two find.
+    iterator find(K k) {
+        if (inner) {
+            auto It = inner.getValue()->find(k);
+            if (It != inner.getValue()->end())
+                return It;
+        }
+
+        return m.find(k);
+    }
+
+    const_iterator find(K k) const {
+        if (inner) {
+            auto It = inner.getValue()->find(k);
+            if (It != inner.getValue()->end())
+                return It;
+        }
+
+        return m.find(k);
+    }
+
+
+    void pushScope() {
+        if (!inner) {
+            inner = Optional<Scope<K, V>>(new Scope());
+        } else {
+            inner->pushScope();
+        }
+    }
+
+    void popScope() {
+        assert(inner && "calling popScope on the innermost scope");
+        if (inner->isInnermostScope()) {
+            inner = None;
+        }
+        else {
+            inner->popScope();
+        }
+    }
+
+    bool isInnermostScope() const {
+        return !inner;
+    }
+};
+
 static const int stackSize = 5000;
 struct BuildCtx {
    public:
-    using BindingMapTy = std::map<Binding *, Function *>;
+    using IdentifierMapTy = Scope<Identifier, Value *>;
 
     using TypeMapTy =
         std::map<ConstructorName, std::pair<DataDeclaration *, Type *>>;
@@ -78,6 +151,7 @@ struct BuildCtx {
                                        FunctionType::get(builder.getVoidTy(),
                                                          /*isVarArg=*/false),
                                        "printInt");
+        identifiermap.insert("printInt", printInt);
 
         malloc = getOrCreateFunction(
             m,
@@ -98,16 +172,21 @@ struct BuildCtx {
         // *** Return */
     }
 
-    void insertBinding(Binding *b, Function *f) { bindingmap[b] = f; }
+    void insertBinding(Binding *b, Function *f) { 
+        identifiermap.insert(b->getName(), f);
+    }
 
     Function *getFunctionFromName(std::string name) const {
-        if (name == "printInt") return printInt;
-        for (auto It : bindingmap)
-            if (It.first->getName() == name) return It.second;
-
-        cerr << __PRETTY_FUNCTION__ << " |unknown function with name: " << name
-             << "\n";
-        assert(false && "unknown function");
+        errs() << __PRETTY_FUNCTION__<< "name: " << name << "\n";
+        auto It = identifiermap.find(name);
+        if (It == identifiermap.end()) {
+            assert(false && "function not found");
+        }
+        Value *V = It->second;
+        if (!isa<Function>(V)) {
+            assert(false && "expected function, found value");
+        }
+        return cast<Function>(V);
     }
 
     void insertType(std::string name, DataDeclaration *decl, Type *type) {
@@ -137,7 +216,7 @@ struct BuildCtx {
     }
 
    private:
-    BindingMapTy bindingmap;
+    IdentifierMapTy identifiermap;
     TypeMapTy typemap;
 
     static void populateIntrinsicTypes(Module &m, StgIRBuilder &builder,
@@ -158,9 +237,10 @@ struct BuildCtx {
                                 "push" + name);
         Type *stackTy = ArrayType::get(elemTy, size);
         // Constant *Init = ConstantAggregateZero::get(stackTy);
-        stack = new GlobalVariable(m, stackTy, /*isConstant=*/false,
-                                   GlobalValue::ExternalLinkage,
-                                   /*Initializer=*/ConstantAggregateZero::get(stackTy), "stack" + name);
+        stack = new GlobalVariable(
+            m, stackTy, /*isConstant=*/false, GlobalValue::ExternalLinkage,
+            /*Initializer=*/ConstantAggregateZero::get(stackTy),
+            "stack" + name);
 
         stackTop = new GlobalVariable(
             m, builder.getInt64Ty(), /*isConstant=*/false,
@@ -213,18 +293,22 @@ struct BuildCtx {
     }
 };
 
-Value *materializeAtomInt(const AtomInt *i, StgIRBuilder &builder, BuildCtx &bctx) {
+Value *materializeAtomInt(const AtomInt *i, StgIRBuilder &builder,
+                          BuildCtx &bctx) {
     return builder.getInt64(i->getVal());
 }
 
-Value *materializeAtomIdent(const AtomIdent *id, StgIRBuilder &builder, BuildCtx &bctx) {
+Value *materializeAtomIdent(const AtomIdent *id, StgIRBuilder &builder,
+                            BuildCtx &bctx) {
     assert(false && "umimplemented materialization of identifier atom");
 }
 
 Value *materializeAtom(const Atom *a, StgIRBuilder &builder, BuildCtx &bctx) {
     switch (a->getKind()) {
-        case Atom::AK_Int: return materializeAtomInt(cast<AtomInt>(a), builder, bctx);
-        case Atom::AK_Ident: return materializeAtomIdent(cast<AtomIdent>(a), builder, bctx);
+        case Atom::AK_Int:
+            return materializeAtomInt(cast<AtomInt>(a), builder, bctx);
+        case Atom::AK_Ident:
+            return materializeAtomIdent(cast<AtomIdent>(a), builder, bctx);
     }
     assert(false && "unreachable, switch case should have fired");
 }
@@ -425,12 +509,11 @@ int compile_program(stg::Program *program, int argc, char **argv) {
 
     m.print(errs(), nullptr);
 
-    if(argc != 1) {
+    if (argc != 1) {
         assert(argc == 2);
         std::error_code EC;
         llvm::raw_fd_ostream OS(argv[1], EC, llvm::sys::fs::F_None);
         llvm::WriteBitcodeToFile(&m, OS);
-
     }
     return 0;
 }
