@@ -1,4 +1,0 @@
-data Int (PrimInt)
-binding three = \() -> Int { Int (3) }
-binding main = \() -> Void { case three of
-                                Int ( x ) -> print (x); }

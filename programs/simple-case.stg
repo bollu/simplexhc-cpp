@@ -1,0 +1,5 @@
+data Int  = Int (PrimInt);
+binding three = \() -> Int { Int (3) };
+binding main = \() -> Void { case three of
+                                Int ( x ) -> printInt (x); 
+                            };
