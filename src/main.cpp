@@ -61,7 +61,7 @@ class Scope {
     Optional<Scope<K, V> *> inner;
 
    public:
-    Scope() : inner(None) {};
+    Scope() : inner(None){};
 
     void insert(K k, V v) {
         if (inner)
@@ -75,15 +75,13 @@ class Scope {
     iterator end() { return m.end(); }
     const_iterator end() const { return m.end(); }
 
-
     // If our inner scope has this value, give it. Otherwise, default
     // and give what we have.
     // TODO: find a way to reduce code duplication b/w the two find.
     iterator find(K k) {
         if (inner) {
             auto It = inner.getValue()->find(k);
-            if (It != inner.getValue()->end())
-                return It;
+            if (It != inner.getValue()->end()) return It;
         }
 
         return m.find(k);
@@ -92,13 +90,11 @@ class Scope {
     const_iterator find(K k) const {
         if (inner) {
             auto It = inner.getValue()->find(k);
-            if (It != inner.getValue()->end())
-                return It;
+            if (It != inner.getValue()->end()) return It;
         }
 
         return m.find(k);
     }
-
 
     void pushScope() {
         if (!inner) {
@@ -112,15 +108,12 @@ class Scope {
         assert(inner && "calling popScope on the innermost scope");
         if (inner.getValue()->isInnermostScope()) {
             inner = None;
-        }
-        else {
+        } else {
             inner.getValue()->popScope();
         }
     }
 
-    bool isInnermostScope() const {
-        return !inner;
-    }
+    bool isInnermostScope() const { return !inner; }
 };
 
 static const int stackSize = 5000;
@@ -173,7 +166,7 @@ struct BuildCtx {
     }
 
     // map a binding to a function in the given scope.
-    void insertBinding(Binding *b, Function *f) { 
+    void insertBinding(Binding *b, Function *f) {
         identifiermap.insert(b->getName(), f);
     }
 
@@ -184,23 +177,19 @@ struct BuildCtx {
 
     // lookup an identifier form the current scope
     Value *getIdentifier(Identifier ident) {
-        auto It =  identifiermap.find(ident);
+        auto It = identifiermap.find(ident);
         assert(It != identifiermap.end());
         return It->second;
     }
 
     // push a scope for identifier resolution
-    void pushScope() {
-        identifiermap.pushScope();
-    }
+    void pushScope() { identifiermap.pushScope(); }
 
     // pop a scope for identifier resolution
-    void popScope() {
-        identifiermap.popScope();
-    }
+    void popScope() { identifiermap.popScope(); }
 
     Function *getFunctionFromName(std::string name) const {
-        errs() << __PRETTY_FUNCTION__<< "name: " << name << "\n";
+        errs() << __PRETTY_FUNCTION__ << "name: " << name << "\n";
         auto It = identifiermap.find(name);
         if (It == identifiermap.end()) {
             assert(false && "function not found");
@@ -352,19 +341,31 @@ void materializeAp(const ExpressionAp *ap, Module &m, StgIRBuilder &builder,
 
 void materializeConstructor(const ExpressionConstructor *c, Module &m,
                             StgIRBuilder &builder, BuildCtx &bctx) {
-    int TotalSize = 0;
+
+    // TODO: refactor this to use DataLayout.
+    int TotalSize = 8; // for the tag.
     for (Atom *a : c->args_range()) {
         AtomInt *ai = cast<AtomInt>(a);
-
         TotalSize += 4;  // bytes.
     }
+    DataDeclaration *decl;
+    Type *structType;
+    
+    std::tie(decl, structType) = bctx.getTypeFromName(c->getName());
     Value *rawMem = builder.CreateCall(bctx.malloc,
                                        {builder.getInt64(TotalSize)}, "rawmem");
-    Type *structType = bctx.getTypeFromName(c->getName()).second;
     Value *typedMem =
         builder.CreateBitCast(rawMem, structType->getPointerTo(), "typedmem");
+
+    // const int Tag = decl->getIndexForTypeName(c->getName());
+    const int Tag = 0;
+    Value *tagIndex = builder.CreateGEP(
+            typedMem, {builder.getInt64(0), builder.getInt32(0)}, "tag_index");
+    builder.CreateStore(builder.getInt64(Tag), tagIndex);
+    
+
     // Push values into the constructed value
-    unsigned i = 0;
+    unsigned i = 1;
     for (Atom *a : c->args_range()) {
         AtomInt *ai = cast<AtomInt>(a);
         std::vector<Value *> idxs = {builder.getInt64(0), builder.getInt32(i)};
@@ -386,9 +387,70 @@ void materializeConstructor(const ExpressionConstructor *c, Module &m,
     CreateTailCall(builder, ReturnCont, {});
 };
 
+// materialize destructure code for an alt over a constructor.
+void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
+                                              const CaseAltDestructure *d,
+                                              Module &m, StgIRBuilder &builder,
+                                              BuildCtx &bctx) {
+    // TODO: create an RTTI class that does the push/pop automatically
+    bctx.pushScope();
+
+    // TODO: check that we have the correct destructured value
+    // TODO: create Scope :P
+    int i = 0;
+    DataDeclaration *Decl;
+    Type *T;
+    std::tie(Decl, T) = bctx.getTypeFromName(d->getConstructorName());
+    // a constructor will have a StructType. If not, this deserves
+    // to blow up. TODO: make this safe.
+    StructType *DeclTy = cast<StructType>(T);
+
+    Value *MemAddr = builder.CreateCall(bctx.popInt, {}, "memaddr");
+
+    Value *StructPtr =
+        builder.CreateIntToPtr(MemAddr, DeclTy->getPointerTo(), "structptr");
+
+    // Declaration and destructuring param sizes should match.
+    assert(Decl->types_size() == d->variables_size());
+    for (Identifier var : d->variables_range()) {
+        // We need i+1 because 0th slot is used for type.
+        SmallVector<Value *, 2> Idxs = {builder.getInt64(0),
+                                        builder.getInt32(i + 1)};
+        Value *Slot =
+            builder.CreateGEP(StructPtr, Idxs, "slot_int_" + std::to_string(i));
+        Value *V = builder.CreateLoad(Slot, "arg_int_" + std::to_string(i));
+        if (*Decl->getTypeName(i) == "PrimInt") {
+            bctx.insertIdentifier(var, V);
+        } else {
+            assert(false && "umimplemented destructuring for non int types");
+        }
+        i++;
+    }
+    materializeExpr(d->getRHS(), m, builder, bctx);
+    bctx.popScope();
+}
+
+void materializeCaseConstructorAlt(const ExpressionCase *c, const CaseAlt *a,
+                                   Module &m, StgIRBuilder &builder,
+                                   BuildCtx &bctx) {
+    switch (a->getKind()) {
+        case CaseAlt::CAK_Destructure:
+            materializeCaseConstructorAltDestructure(
+                c, cast<CaseAltDestructure>(a), m, builder, bctx);
+            break;
+        case CaseAlt::CAK_Int:
+            assert(false && "case of a non-int scrutinee cannot have int");
+            break;
+        case CaseAlt::CAK_Variable:
+            assert(false && "unimplemented");
+            break;
+    }
+}
+
 // materialize alternate handling of case `ident` of ...)
-Function *materializeCaseConstructorAlt(const ExpressionCase *c, Module &m,
-                                        StgIRBuilder &builder, BuildCtx &bctx) {
+Function *materializeCaseConstructorAlts(const ExpressionCase *c, Module &m,
+                                         StgIRBuilder &builder,
+                                         BuildCtx &bctx) {
     const Identifier scrutinee = cast<AtomIdent>(c->getScrutinee())->getIdent();
     Function *handler = getOrCreateFunction(
         m, FunctionType::get(builder.getVoidTy(), {}, /*isVarArg=*/false),
@@ -399,43 +461,7 @@ Function *materializeCaseConstructorAlt(const ExpressionCase *c, Module &m,
     // We can only handle one alt :)
     assert(c->alts_size() == 1);
     for (CaseAlt *a : c->alts_range()) {
-        if (CaseAltDestructure *d = dyn_cast<CaseAltDestructure>(a)) {
-            // TODO: create an RTTI class that does the push/pop automatically
-            bctx.pushScope();
-
-            // TODO: check that we have the correct destructured value
-            // TODO: create Scope :P
-            int i = 0;
-            DataDeclaration *Decl;
-            Type *T;
-            std::tie(Decl, T) = bctx.getTypeFromName(d->getConstructorName());
-            // a constructor will have a StructType. If not, this deserves
-            // to blow up. TODO: make this safe.
-            StructType *DeclTy = cast<StructType>(T);
-
-            Value *MemAddr = builder.CreateCall(bctx.popInt, {}, "memaddr");
-            Value *StructPtr = builder.CreateIntToPtr(MemAddr, DeclTy->getPointerTo(), "structptr");
-
-            // Declaration and destructuring param sizes should match.
-            assert(Decl->types_size() == d->variables_size());
-            for (Identifier var : d->variables_range()) {
-                SmallVector<Value *, 2> Idxs = { builder.getInt64(0), builder.getInt32(i) };
-                Value *Slot = builder.CreateGEP(StructPtr, Idxs, "slot_int_" + std::to_string(i));
-                Value *V = builder.CreateLoad(Slot, "arg_int_" + std::to_string(i));
-                if (*Decl->getTypeName(i) == "PrimInt") {
-                    bctx.insertIdentifier(var, V);
-                } else {
-                    assert(false &&
-                           "umimplemented destructuring for non int types");
-                }
-                i++;
-            }
-            materializeExpr(a->getRHS(), m, builder, bctx);
-            bctx.popScope();
-
-        } else {
-            assert(false && "unimplemented.");
-        }
+        materializeCaseConstructorAlt(c, a, m, builder, bctx);
     }
     builder.CreateRetVoid();
     return handler;
@@ -455,7 +481,7 @@ void materializeCaseConstructor(const ExpressionCase *c, Module &m,
     // TODO: come up with a notion of scope.
     Function *Next = bctx.getFunctionFromName(scrutinee);
     // push a return continuation for the function `Next` to follow.
-    Function *AltHandler = materializeCaseConstructorAlt(c, m, builder, bctx);
+    Function *AltHandler = materializeCaseConstructorAlts(c, m, builder, bctx);
 
     builder.SetInsertPoint(BB);
     builder.CreateCall(bctx.pushReturnCont, {AltHandler});
@@ -467,6 +493,9 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
     if (isa<AtomInt>(c->getScrutinee())) {
         assert(false && "primitive case unimplemented");
     } else {
+        // HACK: Right now, we assume that all non-direct matches are over
+        // constructors, this is wrong a f. We should actually look at the
+        // type of c->scrutinee and then decide.
         materializeCaseConstructor(c, m, builder, bctx);
     }
 }
@@ -510,8 +539,10 @@ Function *materializeBinding(const Binding *b, Module &m, StgIRBuilder &builder,
 }
 
 StructType *materializeDataDeclaration(const DataDeclaration *decl,
-                                       const Module &m, const BuildCtx &bctx) {
+                                       const Module &m, StgIRBuilder &builder,
+                                       const BuildCtx &bctx) {
     std::vector<Type *> Elements;
+    Elements.push_back(builder.getInt64Ty());  // TAG.
     for (TypeName *Name : decl->types_range()) {
         Elements.push_back(bctx.getTypeFromName(*Name).second);
     }
@@ -532,7 +563,7 @@ int compile_program(stg::Program *program, int argc, char **argv) {
     Binding *entrystg = nullptr;
     for (DataDeclaration *decl : program->declarations_range()) {
         bctx.insertType(decl->getName(), decl,
-                        materializeDataDeclaration(decl, m, bctx));
+                        materializeDataDeclaration(decl, m, builder, bctx));
     }
 
     for (Binding *b : program->bindings_range()) {

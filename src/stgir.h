@@ -195,6 +195,7 @@ class ExpressionConstructor : public Expression {
 class CaseAlt {
    public:
     Expression *getRHS() { return rhs; }
+    const Expression *getRHS() const { return rhs; }
 
     friend std::ostream &operator<<(std::ostream &os, const CaseAlt &a);
     virtual void print(std::ostream &os) const = 0;
