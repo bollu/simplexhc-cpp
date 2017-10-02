@@ -5,16 +5,19 @@ LIBSTGPATH=../build/
 LLC=llc
 CC=clang
 
-$SIMPLEXHC < $1  out.ll >/dev/null
+OUTLL=$1".out.ll"
+OUTO=$1".out.o"
+
+$SIMPLEXHC < $1  $OUTLL >/dev/null
 ret=$?
 if [ $ret -ne 0 ]; then
-    cat out.ll
-    rm out.ll
+    cat $OUTLL
+    rm $OUTLL
 else
-    $LLC out.ll -filetype=obj -o out.o
-    rm out.ll
-    $CC out.o -L $LIBSTGPATH -lstgruntime -o $1.out
-    rm out.o
+    $LLC $OUTLL -filetype=obj -o $OUTO
+    rm $OUTLL
+    $CC $OUTO -L $LIBSTGPATH -lstgruntime -o $1.out
+    rm $OUTO
 fi;
 
 if [  $(dirname $1)  == $(dirname $0) ]; then
