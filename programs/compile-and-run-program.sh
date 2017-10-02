@@ -17,4 +17,12 @@ else
     rm out.o
 fi;
 
-./$1.out
+if [  $(dirname $1)  == $(dirname $0) ]; then
+    # need to figure out how to set STG programs's exit code :)
+    ./$1.out || true
+else
+    $1.out || true
+fi;
+
+exit 0
+

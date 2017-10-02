@@ -1,4 +1,8 @@
-data Int (PrimInt PrimInt)
-binding three = \() -> Int { Int (5 3) }
+# RUN: ./compile-and-run-program.sh %s | FileCheck %s
+# CHECK: 2
+
+data Int = Int2(PrimInt PrimInt);
+binding three = \() -> Int { Int2 (5 2) };
 binding main = \() -> Void { case three of
-                                Int ( x y) -> printInt (y); }
+                                Int2(x y) -> printInt (y);
+                            };

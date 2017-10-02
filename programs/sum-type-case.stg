@@ -1,4 +1,10 @@
+# RUN: ./compile-and-run-program.sh %s | FileCheck %s
+# CHECK: 10
+
 data DInt  = Int (PrimInt) | Int2 (PrimInt PrimInt);
+
 binding three = \() -> DInt { Int2 (5 10) };
 binding main = \() -> Void { case three of
-                                Int2 (x y) -> printInt (y); Int (x) -> printInt (x); };
+                                Int2 (x y) -> printInt (y);
+                                Int (x) -> printInt (x);
+                            };
