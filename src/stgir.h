@@ -13,13 +13,21 @@ using ConstructorName = std::string;
 using TypeName = std::string;
 
 // *** Data declaration
+class DataDeclaration;
 class DataDeclarationBranch {
    public:
     using TypeList = SmallVector<TypeName *, 4>;
 
    private:
+    friend class DataDeclaration;
     ConstructorName name;
     TypeList types;
+
+    const DataDeclaration *parent;
+    void _setParent(DataDeclaration *parent) {
+        this->parent = parent;
+        assert(parent);
+    }
 
    public:
     DataDeclarationBranch(ConstructorName name, ArrayRef<TypeName *> typesref)
@@ -51,6 +59,11 @@ class DataDeclarationBranch {
     size_t types_size() const { return types.size(); }
     bool types_empty() const { return types.empty(); }
 
+    const DataDeclaration *getParent() {
+        assert(parent);
+        return this->parent;
+    }
+
     void print(std::ostream &os) const;
     friend std::ostream &operator<<(std::ostream &os,
                                     const DataDeclarationBranch &branch);
@@ -71,6 +84,7 @@ class DataDeclaration {
                     ArrayRef<DataDeclarationBranch *> branchesref)
         : name(name) {
         for (DataDeclarationBranch *b : branchesref) {
+            b->_setParent(this);
             branches.push_back(b);
         }
     }
@@ -83,15 +97,19 @@ class DataDeclaration {
 
     TypeName getTypeName() const { return name; }
 
-    iterator_range<iterator> branches_range() { return make_range(begin(), end()); }
-    iterator_range<const_iterator> branches_range() const { return make_range(begin(), end()); }
+    iterator_range<iterator> branches_range() {
+        return make_range(begin(), end());
+    }
+    iterator_range<const_iterator> branches_range() const {
+        return make_range(begin(), end());
+    }
 
     void print(std::ostream &os) const;
     friend std::ostream &operator<<(std::ostream &os,
                                     const DataDeclaration &decl);
     unsigned getIndexForBranch(const DataDeclarationBranch *needle) const {
-        for(int i = 0; i < branches.size(); i++) {
-            if (branches[i] == needle)  return i;
+        for (int i = 0; i < branches.size(); i++) {
+            if (branches[i] == needle) return i;
         }
 
         assert(false && "unknown branch variant asked for data declaration");

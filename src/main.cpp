@@ -122,7 +122,8 @@ struct BuildCtx {
     using IdentifierMapTy = Scope<Identifier, Value *>;
 
     using TypeMapTy =
-        std::map<ConstructorName, std::tuple<DataDeclaration *, DataDeclarationBranch *, Type *>>;
+        std::map<ConstructorName, std::tuple<DataDeclaration *,
+                                             DataDeclarationBranch *, Type *>>;
 
     Function *printInt, *popInt, *pushInt;
     Function *malloc;
@@ -203,13 +204,14 @@ struct BuildCtx {
 
     // TODO: this cannot be structType because we can have things like
     // PrimInt. This is an abuse and I should fix this.
-    void insertType(std::string name, DataDeclaration *decl, DataDeclarationBranch *branch,  Type *type) {
+    void insertType(std::string name, DataDeclaration *decl,
+                    DataDeclarationBranch *branch, Type *type) {
         errs() << __PRETTY_FUNCTION__ << " inserting: " << name << "\n";
         typemap[name] = std::make_tuple(decl, branch, type);
     }
 
-    std::tuple<DataDeclaration *, DataDeclarationBranch*, Type *> getTypeFromName(
-        std::string name) const {
+    std::tuple<DataDeclaration *, DataDeclarationBranch *, Type *>
+    getTypeFromName(std::string name) const {
         auto It = typemap.find(name);
         if (It == typemap.end()) {
             errs() << "unknown name: " << name << "\n";
@@ -224,7 +226,8 @@ struct BuildCtx {
 
     static void populateIntrinsicTypes(Module &m, StgIRBuilder &builder,
                                        TypeMapTy &map) {
-        map["PrimInt"] = std::make_tuple(nullptr, nullptr, builder.getInt64Ty());
+        map["PrimInt"] =
+            std::make_tuple(nullptr, nullptr, builder.getInt64Ty());
     }
 
     static void addStack(Module &m, StgIRBuilder &builder, Type *elemTy,
@@ -330,9 +333,8 @@ void materializeAp(const ExpressionAp *ap, Module &m, StgIRBuilder &builder,
 
 void materializeConstructor(const ExpressionConstructor *c, Module &m,
                             StgIRBuilder &builder, BuildCtx &bctx) {
-
     // TODO: refactor this to use DataLayout.
-    int TotalSize = 8; // for the tag.
+    int TotalSize = 8;  // for the tag.
     for (Atom *a : c->args_range()) {
         AtomInt *ai = cast<AtomInt>(a);
         TotalSize += 4;  // bytes.
@@ -340,19 +342,17 @@ void materializeConstructor(const ExpressionConstructor *c, Module &m,
     DataDeclaration *decl;
     DataDeclarationBranch *branch;
     Type *structType;
-    
+
     std::tie(decl, branch, structType) = bctx.getTypeFromName(c->getName());
     Value *rawMem = builder.CreateCall(bctx.malloc,
                                        {builder.getInt64(TotalSize)}, "rawmem");
     Value *typedMem =
         builder.CreateBitCast(rawMem, structType->getPointerTo(), "typedmem");
 
-    
     const int Tag = decl->getIndexForBranch(branch);
     Value *tagIndex = builder.CreateGEP(
-            typedMem, {builder.getInt64(0), builder.getInt32(0)}, "tag_index");
+        typedMem, {builder.getInt64(0), builder.getInt32(0)}, "tag_index");
     builder.CreateStore(builder.getInt64(Tag), tagIndex);
-    
 
     // Push values into the constructed value
     unsigned i = 1;
@@ -378,6 +378,7 @@ void materializeConstructor(const ExpressionConstructor *c, Module &m,
 };
 
 // materialize destructure code for an alt over a constructor.
+// Assumes that the builder is focused on the correct basic block.
 void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
                                               const CaseAltDestructure *d,
                                               Module &m, StgIRBuilder &builder,
@@ -439,6 +440,37 @@ void materializeCaseConstructorAlt(const ExpressionCase *c, const CaseAlt *a,
     }
 }
 
+static DataDeclaration *getCommonDataDeclarationFromAlts(
+    const ExpressionCase *c, const StgIRBuilder &builder,
+    const BuildCtx &bctx) {
+    DataDeclaration *commondecl = nullptr;
+    auto setCommonType = [&](DataDeclaration *newdecl) -> void {
+        if (commondecl == nullptr) {
+            commondecl = newdecl;
+            return;
+        };
+        assert(commondecl == newdecl &&
+               "derived two different data declarations for case");
+    };
+
+    for (CaseAlt *a : c->alts_range()) {
+        if (CaseAltDestructure *destructure = dyn_cast<CaseAltDestructure>(a)) {
+            DataDeclaration *decl = std::get<0>(
+                bctx.getTypeFromName(destructure->getConstructorName()));
+            setCommonType(decl);
+        } else if (CaseAltInt *i = dyn_cast<CaseAltInt>(a)) {
+            assert(false && "unimplemented type deduction");
+        } else if (CaseAltVariable *d = dyn_cast<CaseAltVariable>(a)) {
+            assert(false &&
+                   "unimplemented  type deduction for case alt variable");
+        } else {
+            assert(false && "unknown case alt.");
+        }
+    }
+    assert(commondecl);
+    return commondecl;
+};
+
 // materialize alternate handling of case `ident` of ...)
 Function *materializeCaseConstructorAlts(const ExpressionCase *c, Module &m,
                                          StgIRBuilder &builder,
@@ -450,8 +482,11 @@ Function *materializeCaseConstructorAlts(const ExpressionCase *c, Module &m,
     BasicBlock *Entry = BasicBlock::Create(m.getContext(), "entry", handler);
     builder.SetInsertPoint(Entry);
 
-    // We can only handle one alt :)
-    assert(c->alts_size() == 1);
+
+    DataDeclaration *DataDecl =
+        getCommonDataDeclarationFromAlts(c, builder, bctx);
+
+
     for (CaseAlt *a : c->alts_range()) {
         materializeCaseConstructorAlt(c, a, m, builder, bctx);
     }
@@ -530,11 +565,11 @@ Function *materializeBinding(const Binding *b, Module &m, StgIRBuilder &builder,
     return F;
 }
 
-
 StructType *materializeDataDeclarationBranch(const DataDeclaration *decl,
-                                        const DataDeclarationBranch *b, 
-                                       const Module &m, StgIRBuilder &builder,
-                                       const BuildCtx &bctx) {
+                                             const DataDeclarationBranch *b,
+                                             const Module &m,
+                                             StgIRBuilder &builder,
+                                             const BuildCtx &bctx) {
     std::vector<Type *> Elements;
     Elements.push_back(builder.getInt64Ty());  // TAG.
     for (TypeName *Name : b->types_range()) {
@@ -542,7 +577,8 @@ StructType *materializeDataDeclarationBranch(const DataDeclaration *decl,
     }
 
     StructType *Ty =
-        StructType::create(m.getContext(), Elements, decl->getTypeName() + "_variant_" + b->getName());
+        StructType::create(m.getContext(), Elements,
+                           decl->getTypeName() + "_variant_" + b->getName());
     return Ty;
 };
 
@@ -558,10 +594,11 @@ int compile_program(stg::Program *program, int argc, char **argv) {
     for (DataDeclaration *decl : program->declarations_range()) {
         cout << "decl: " << *decl << "\n";
         assert(decl->branches_size() > 0);
-        for(DataDeclarationBranch *branch : decl->branches_range()) {
+        for (DataDeclarationBranch *branch : decl->branches_range()) {
             cout << "\tbranch: " << *branch << "\n";
-            bctx.insertType(branch->getName(), decl, branch, 
-                    materializeDataDeclarationBranch(decl,  branch, m, builder, bctx));
+            bctx.insertType(branch->getName(), decl, branch,
+                            materializeDataDeclarationBranch(decl, branch, m,
+                                                             builder, bctx));
         }
     }
 
