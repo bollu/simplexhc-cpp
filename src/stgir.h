@@ -13,24 +13,24 @@ using ConstructorName = std::string;
 using TypeName = std::string;
 
 // *** Data declaration
-class DataDeclaration;
-class DataDeclarationBranch {
+class DataType;
+class DataConstructor {
    public:
     using TypeList = SmallVector<TypeName *, 4>;
 
    private:
-    friend class DataDeclaration;
+    friend class DataType;
     ConstructorName name;
     TypeList types;
 
-    const DataDeclaration *parent;
-    void _setParent(DataDeclaration *parent) {
+    const DataType *parent;
+    void _setParent(DataType *parent) {
         this->parent = parent;
         assert(parent);
     }
 
    public:
-    DataDeclarationBranch(ConstructorName name, ArrayRef<TypeName *> typesref)
+    DataConstructor(ConstructorName name, ArrayRef<TypeName *> typesref)
         : name(name) {
         for (TypeName *t : typesref) {
             types.push_back(t);
@@ -59,60 +59,60 @@ class DataDeclarationBranch {
     size_t types_size() const { return types.size(); }
     bool types_empty() const { return types.empty(); }
 
-    const DataDeclaration *getParent() {
+    const DataType *getParent() {
         assert(parent);
         return this->parent;
     }
 
     void print(std::ostream &os) const;
     friend std::ostream &operator<<(std::ostream &os,
-                                    const DataDeclarationBranch &branch);
+                                    const DataConstructor &branch);
 };
 
-class DataDeclaration {
+class DataType {
    public:
-    using DataDeclarationBranchList = SmallVector<DataDeclarationBranch *, 4>;
-    using iterator = DataDeclarationBranchList::iterator;
-    using const_iterator = DataDeclarationBranchList::const_iterator;
+    using DataConstructorList = SmallVector<DataConstructor *, 4>;
+    using iterator = DataConstructorList::iterator;
+    using const_iterator = DataConstructorList::const_iterator;
 
    private:
-    DataDeclarationBranchList branches;
+    DataConstructorList constructors;
     TypeName name;
 
    public:
-    DataDeclaration(TypeName name,
-                    ArrayRef<DataDeclarationBranch *> branchesref)
+    DataType(TypeName name,
+                    ArrayRef<DataConstructor *> consref)
         : name(name) {
-        for (DataDeclarationBranch *b : branchesref) {
-            b->_setParent(this);
-            branches.push_back(b);
+        for (DataConstructor *c : consref) {
+            c->_setParent(this);
+            constructors.push_back(c);
         }
     }
-    iterator begin() { return branches.begin(); }
-    const_iterator begin() const { return branches.begin(); }
+    iterator begin() { return constructors.begin(); }
+    const_iterator begin() const { return constructors.begin(); }
 
-    iterator end() { return branches.end(); }
-    const_iterator end() const { return branches.end(); }
-    size_t branches_size() { return branches.size(); }
+    iterator end() { return constructors.end(); }
+    const_iterator end() const { return constructors.end(); }
+    size_t constructors_size() { return constructors.size(); }
 
     TypeName getTypeName() const { return name; }
 
-    iterator_range<iterator> branches_range() {
+    iterator_range<iterator> constructors_range() {
         return make_range(begin(), end());
     }
-    iterator_range<const_iterator> branches_range() const {
+    iterator_range<const_iterator> constructors_range() const {
         return make_range(begin(), end());
     }
 
     void print(std::ostream &os) const;
     friend std::ostream &operator<<(std::ostream &os,
-                                    const DataDeclaration &decl);
-    unsigned getIndexForBranch(const DataDeclarationBranch *needle) const {
-        for (int i = 0; i < branches.size(); i++) {
-            if (branches[i] == needle) return i;
+                                    const DataType &decl);
+    unsigned getIndexForConstructor(const DataConstructor *needle) const {
+        for (int i = 0; i < constructors.size(); i++) {
+            if (constructors[i] == needle) return i;
         }
 
-        assert(false && "unknown branch variant asked for data declaration");
+        assert(false && "unknown data constructor variant asked for data declaration");
     }
 };
 
@@ -430,16 +430,16 @@ class Binding {
 // *** Program ***
 class Program {
    public:
-    Program(ArrayRef<Binding *> bs, ArrayRef<DataDeclaration *> ds) {
+    Program(ArrayRef<Binding *> bs, ArrayRef<DataType *> ds) {
         for (Binding *b : bs) bindings.push_back(b);
-        for (DataDeclaration *d : ds) declarations.push_back(d);
+        for (DataType *d : ds) datatypes.push_back(d);
     };
 
-    using DataDeclarationList = SmallVector<DataDeclaration *, 4>;
+    using DataTypeList = SmallVector<DataType *, 4>;
     using BindingList = SmallVector<Binding *, 4>;
 
     using binding_iterator = BindingList::iterator;
-    using declaration_iterator = DataDeclarationList::iterator;
+    using datatype_iterator = DataTypeList::iterator;
 
     friend std::ostream &operator<<(std::ostream &os, const Program &p);
 
@@ -450,16 +450,16 @@ class Program {
         return make_range(bindings_begin(), bindings_end());
     }
 
-    declaration_iterator declarations_begin() { return declarations.begin(); }
-    declaration_iterator declarations_end() { return declarations.end(); }
+    datatype_iterator datatypes_begin() { return datatypes.begin(); }
+    datatype_iterator datatypes_end() { return datatypes.end(); }
 
-    iterator_range<declaration_iterator> declarations_range() {
-        return make_range(declarations_begin(), declarations_end());
+    iterator_range<datatype_iterator> datatypes_range() {
+        return make_range(datatypes_begin(), datatypes_end());
     }
 
    private:
     BindingList bindings;
-    DataDeclarationList declarations;
+    DataTypeList datatypes;
 };
 
 }  // end namespace stg.

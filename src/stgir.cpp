@@ -29,26 +29,26 @@ void printSepBy(std::ostream &os, std::string prefix, ArrayRef<T> ts, std::strin
   }
   os << postfix;
 }
-// DataDeclarationBranch
-void DataDeclarationBranch::print(std::ostream &os) const {
+// DataConstructor
+void DataConstructor::print(std::ostream &os) const {
   os << name;
   printSepBy(os, "(", ArrayRef<TypeName *>(types), " ", ")");
 };
 
-std::ostream &stg::operator <<(std::ostream &os, const DataDeclarationBranch &decl) {
+std::ostream &stg::operator <<(std::ostream &os, const DataConstructor &decl) {
   decl.print(os);
   return os;
 }
 
-// DataDeclraation
-void DataDeclaration::print(std::ostream &os) const {
+// DataType
+void DataType::print(std::ostream &os) const {
   os << "data ";
   os << name;
   os << " = ";
-  printSepBy(os, "", ArrayRef<DataDeclarationBranch *>(branches), "|", "");
+  printSepBy(os, "", ArrayRef<DataConstructor *>(constructors), "|", "");
 };
 
-std::ostream &stg::operator <<(std::ostream &os, const DataDeclaration &decl) {
+std::ostream &stg::operator <<(std::ostream &os, const DataType &decl) {
   decl.print(os);
   return os;
 }
@@ -146,8 +146,8 @@ void CaseAltDestructure::print(std::ostream &os) const {
 
 std::ostream &stg::operator<<(std::ostream &os, const Program &p) {
     os << "\n";
-    for (DataDeclaration *d : p.declarations){
-      os << *d << "\n";
+    for (DataType *dt : p.datatypes){
+      os << *dt << "\n";
     }
     for(Binding *b : p.bindings) {
         os << *b;

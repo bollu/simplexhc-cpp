@@ -24,10 +24,10 @@ void yyerror(const char *s) {
 std::vector<Atom *> g_atoms;
 std::vector<CaseAlt *> g_alts;
 std::vector<Binding *> g_bindings;
-std::vector<DataDeclaration *> g_datadeclarations;
+std::vector<DataType *> g_datatypes;
 std::vector<Parameter *> g_params;
 std::vector<std::string *>g_types;
-std::vector<DataDeclarationBranch *>g_datadeclarationbranches;
+std::vector<DataConstructor *>g_dataconstructors;
 stg::Program *g_program;
 
 std::string *g_datadeclaration_name;
@@ -46,8 +46,8 @@ void add_param_to_list(Parameter *p) {
   g_params.push_back(p);
 }
 
-void add_data_declaration_branch_to_list(DataDeclarationBranch *b) {
-  g_datadeclarationbranches.push_back(b);
+void add_data_constructor_to_list(DataConstructor *b) {
+  g_dataconstructors.push_back(b);
 }
 %}
 
@@ -57,9 +57,9 @@ void add_data_declaration_branch_to_list(DataDeclarationBranch *b) {
   stg::Expression *expr;
   stg::Lambda *lambda;
   stg::Binding *binding;
-  stg::DataDeclaration *datadeclaration;
+  stg::DataType *datatype;
   stg::Parameter *param;
-  stg::DataDeclarationBranch *datadeclarationbranch;
+  stg::DataConstructor *dataconstructor;
   std::string *constructorName;
 
   bool UNDEF;
@@ -92,8 +92,8 @@ void add_data_declaration_branch_to_list(DataDeclarationBranch *b) {
 %type <lambda> lambda
 %type <expr> expr
 %type <atom> atom
-%type <datadeclaration> datadeclaration
-%type <datadeclarationbranch> datadeclarationbranch
+%type <datatype> datatype
+%type <dataconstructor> dataconstructor
 
 %type <UNDEF> atoms_;
 %type <UNDEF> altlist;
@@ -112,7 +112,7 @@ void add_data_declaration_branch_to_list(DataDeclarationBranch *b) {
 %%
 toplevel:
         program {
-                  g_program = new stg::Program(g_bindings, g_datadeclarations); }
+                  g_program = new stg::Program(g_bindings, g_datatypes); }
 
 binding:
   BINDING ATOMSTRING ASSIGN lambda SEMICOLON { $$ = new stg::Binding(cast<AtomIdent>($2)->getIdent(), $4); };
@@ -126,29 +126,29 @@ typeslist_:
 typeslist: OPENPAREN CLOSEPAREN | OPENPAREN typeslist_ CLOSEPAREN
 
 
-datadeclarationbranch:
+dataconstructor:
   CONSTRUCTORNAME typeslist { 
-    $$ = new stg::DataDeclarationBranch(*$1, g_types);
+    $$ = new stg::DataConstructor(*$1, g_types);
     g_types.clear();
   }
 
-datadeclarationbranchlist: 
-                datadeclarationbranchlist PIPE datadeclarationbranch 
+dataconstructorlist: 
+                dataconstructorlist PIPE dataconstructor 
            {
-                add_data_declaration_branch_to_list($3);
+                add_data_constructor_to_list($3);
            }
-           | datadeclarationbranch {
-                add_data_declaration_branch_to_list($1);
+           | dataconstructor {
+                add_data_constructor_to_list($1);
             }
-datadeclaration: DATA CONSTRUCTORNAME { g_datadeclaration_name = $2; } ASSIGN datadeclarationbranchlist SEMICOLON {
-               $$ = new stg::DataDeclaration(*g_datadeclaration_name, g_datadeclarationbranches);
-               g_datadeclarationbranches.clear();
+datatype: DATA CONSTRUCTORNAME { g_datadeclaration_name = $2; } ASSIGN dataconstructorlist SEMICOLON {
+               $$ = new stg::DataType(*g_datadeclaration_name, g_dataconstructors);
+               g_dataconstructors.clear();
                delete g_datadeclaration_name;
                }
 
 topleveldefn:
   binding { g_bindings.push_back($1); }
-  | datadeclaration { g_datadeclarations.push_back($1); }
+  | datatype { g_datatypes.push_back($1); }
 
 program:
   program topleveldefn lines

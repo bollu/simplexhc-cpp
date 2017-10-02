@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.4.3)
 project(simplexhc C CXX)
 
 # Colors when compiling with clang
-set(CMAKE_CXX_FLAGS "-fdiagnostics-color=always -fno-rtti")
+set(CMAKE_CXX_FLAGS "-fdiagnostics-color=always -fno-rtti -g")
 
 # LLVM
 find_package(LLVM REQUIRED)

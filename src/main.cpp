@@ -121,9 +121,12 @@ struct BuildCtx {
    public:
     using IdentifierMapTy = Scope<Identifier, Value *>;
 
-    using TypeMapTy =
-        std::map<ConstructorName, std::tuple<DataDeclaration *,
-                                             DataDeclarationBranch *, Type *>>;
+    // a map from data constructors to the underlying DataConstructor
+    using DataConstructorMap =
+        std::map<ConstructorName, std::tuple<DataConstructor *, Type*>>;
+
+    // a map from data types to their underlying DataType.
+    using DataTypeMap = std::map<TypeName, DataType *>;
 
     Function *printInt, *popInt, *pushInt;
     Function *malloc;
@@ -139,7 +142,7 @@ struct BuildCtx {
     GlobalVariable *stackReturnContTop;
 
     BuildCtx(Module &m, StgIRBuilder &builder) {
-        populateIntrinsicTypes(m, builder, typemap);
+        populateIntrinsicTypes(m, builder, dataTypeMap, dataConstructorMap);
 
         printInt = getOrCreateFunction(m,
                                        FunctionType::get(builder.getVoidTy(),
@@ -190,7 +193,6 @@ struct BuildCtx {
     void popScope() { identifiermap.popScope(); }
 
     Function *getFunctionFromName(std::string name) const {
-        errs() << __PRETTY_FUNCTION__ << "name: " << name << "\n";
         auto It = identifiermap.find(name);
         if (It == identifiermap.end()) {
             assert(false && "function not found");
@@ -204,16 +206,27 @@ struct BuildCtx {
 
     // TODO: this cannot be structType because we can have things like
     // PrimInt. This is an abuse and I should fix this.
-    void insertType(std::string name, DataDeclaration *decl,
-                    DataDeclarationBranch *branch, Type *type) {
-        errs() << __PRETTY_FUNCTION__ << " inserting: " << name << "\n";
-        typemap[name] = std::make_tuple(decl, branch, type);
+    void insertDataConstructor(std::string name, DataConstructor *cons, Type *type) {
+        dataConstructorMap[name] = std::make_pair(cons, type);
     }
 
-    std::tuple<DataDeclaration *, DataDeclarationBranch *, Type *>
-    getTypeFromName(std::string name) const {
-        auto It = typemap.find(name);
-        if (It == typemap.end()) {
+    std::pair<DataConstructor *, Type *>
+    getDataConstructorFromName(std::string name) const {
+        auto It = dataConstructorMap.find(name);
+        if (It == dataConstructorMap.end()) {
+            errs() << "unknown name: " << name << "\n";
+            assert(false && "unknown data constructor name");
+        }
+        return It->second;
+    }
+    void insertDataType(std::string name, DataType *datatype) {
+        dataTypeMap[name] = datatype;
+    }
+
+    DataType *
+    getDataTypeName(std::string name) const {
+        auto It = dataTypeMap.find(name);
+        if (It == dataTypeMap.end()) {
             errs() << "unknown name: " << name << "\n";
             assert(false && "unknown type name");
         }
@@ -222,12 +235,16 @@ struct BuildCtx {
 
    private:
     IdentifierMapTy identifiermap;
-    TypeMapTy typemap;
+    DataConstructorMap dataConstructorMap;
+    DataTypeMap dataTypeMap;
 
     static void populateIntrinsicTypes(Module &m, StgIRBuilder &builder,
-                                       TypeMapTy &map) {
-        map["PrimInt"] =
-            std::make_tuple(nullptr, nullptr, builder.getInt64Ty());
+                                       DataTypeMap &typemap, DataConstructorMap &consmap) {
+        DataConstructor *cons = new DataConstructor("PrimInt", {});
+        consmap["PrimInt"] = std::make_pair(cons, builder.getInt64Ty());
+
+        DataType *primIntTy = new DataType("PrimInt", {cons});
+        typemap["PrimInt"] = primIntTy;
     }
 
     static void addStack(Module &m, StgIRBuilder &builder, Type *elemTy,
@@ -339,17 +356,16 @@ void materializeConstructor(const ExpressionConstructor *c, Module &m,
         AtomInt *ai = cast<AtomInt>(a);
         TotalSize += 4;  // bytes.
     }
-    DataDeclaration *decl;
-    DataDeclarationBranch *branch;
+    DataConstructor *cons;
     Type *structType;
 
-    std::tie(decl, branch, structType) = bctx.getTypeFromName(c->getName());
+    std::tie(cons, structType) = bctx.getDataConstructorFromName(c->getName());
     Value *rawMem = builder.CreateCall(bctx.malloc,
                                        {builder.getInt64(TotalSize)}, "rawmem");
     Value *typedMem =
         builder.CreateBitCast(rawMem, structType->getPointerTo(), "typedmem");
 
-    const int Tag = decl->getIndexForBranch(branch);
+    const int Tag = 0;
     Value *tagIndex = builder.CreateGEP(
         typedMem, {builder.getInt64(0), builder.getInt32(0)}, "tag_index");
     builder.CreateStore(builder.getInt64(Tag), tagIndex);
@@ -389,11 +405,11 @@ void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
     // TODO: check that we have the correct destructured value
     // TODO: create Scope :P
     int i = 0;
-    DataDeclaration *decl;
-    DataDeclarationBranch *branch;
+    DataType *decl;
+    DataConstructor *cons;
 
     Type *T;
-    std::tie(decl, branch, T) = bctx.getTypeFromName(d->getConstructorName());
+    std::tie(cons, T) = bctx.getDataConstructorFromName(d->getConstructorName());
     // a constructor will have a StructType. If not, this deserves
     // to blow up. TODO: make this safe.
     StructType *DeclTy = cast<StructType>(T);
@@ -404,7 +420,7 @@ void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
         builder.CreateIntToPtr(MemAddr, DeclTy->getPointerTo(), "structptr");
 
     // Declaration and destructuring param sizes should match.
-    assert(branch->types_size() == d->variables_size());
+    assert(cons->types_size() == d->variables_size());
     for (Identifier var : d->variables_range()) {
         // We need i+1 because 0th slot is used for type.
         SmallVector<Value *, 2> Idxs = {builder.getInt64(0),
@@ -412,7 +428,7 @@ void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
         Value *Slot =
             builder.CreateGEP(StructPtr, Idxs, "slot_int_" + std::to_string(i));
         Value *V = builder.CreateLoad(Slot, "arg_int_" + std::to_string(i));
-        if (*branch->getTypeName(i) == "PrimInt") {
+        if (*cons->getTypeName(i) == "PrimInt") {
             bctx.insertIdentifier(var, V);
         } else {
             assert(false && "umimplemented destructuring for non int types");
@@ -440,11 +456,11 @@ void materializeCaseConstructorAlt(const ExpressionCase *c, const CaseAlt *a,
     }
 }
 
-static DataDeclaration *getCommonDataDeclarationFromAlts(
+static DataType *getCommonDataDeclarationFromAlts(
     const ExpressionCase *c, const StgIRBuilder &builder,
     const BuildCtx &bctx) {
-    DataDeclaration *commondecl = nullptr;
-    auto setCommonType = [&](DataDeclaration *newdecl) -> void {
+    DataType *commondecl = nullptr;
+    auto setCommonType = [&](DataType *newdecl) -> void {
         if (commondecl == nullptr) {
             commondecl = newdecl;
             return;
@@ -455,9 +471,6 @@ static DataDeclaration *getCommonDataDeclarationFromAlts(
 
     for (CaseAlt *a : c->alts_range()) {
         if (CaseAltDestructure *destructure = dyn_cast<CaseAltDestructure>(a)) {
-            DataDeclaration *decl = std::get<0>(
-                bctx.getTypeFromName(destructure->getConstructorName()));
-            setCommonType(decl);
         } else if (CaseAltInt *i = dyn_cast<CaseAltInt>(a)) {
             assert(false && "unimplemented type deduction");
         } else if (CaseAltVariable *d = dyn_cast<CaseAltVariable>(a)) {
@@ -482,9 +495,6 @@ Function *materializeCaseConstructorAlts(const ExpressionCase *c, Module &m,
     BasicBlock *Entry = BasicBlock::Create(m.getContext(), "entry", handler);
     builder.SetInsertPoint(Entry);
 
-
-    DataDeclaration *DataDecl =
-        getCommonDataDeclarationFromAlts(c, builder, bctx);
 
 
     for (CaseAlt *a : c->alts_range()) {
@@ -565,15 +575,16 @@ Function *materializeBinding(const Binding *b, Module &m, StgIRBuilder &builder,
     return F;
 }
 
-StructType *materializeDataDeclarationBranch(const DataDeclaration *decl,
-                                             const DataDeclarationBranch *b,
+// construct a StructType for a DataConstructor
+StructType *materializeDataConstructor(const DataType *decl,
+                                             const DataConstructor *b,
                                              const Module &m,
                                              StgIRBuilder &builder,
                                              const BuildCtx &bctx) {
     std::vector<Type *> Elements;
     Elements.push_back(builder.getInt64Ty());  // TAG.
     for (TypeName *Name : b->types_range()) {
-        Elements.push_back(get<2>(bctx.getTypeFromName(*Name)));
+        Elements.push_back(get<1>(bctx.getDataConstructorFromName(*Name)));
     }
 
     StructType *Ty =
@@ -591,14 +602,11 @@ int compile_program(stg::Program *program, int argc, char **argv) {
     BuildCtx bctx(m, builder);
 
     Binding *entrystg = nullptr;
-    for (DataDeclaration *decl : program->declarations_range()) {
-        cout << "decl: " << *decl << "\n";
-        assert(decl->branches_size() > 0);
-        for (DataDeclarationBranch *branch : decl->branches_range()) {
-            cout << "\tbranch: " << *branch << "\n";
-            bctx.insertType(branch->getName(), decl, branch,
-                            materializeDataDeclarationBranch(decl, branch, m,
-                                                             builder, bctx));
+    for (DataType *datatype : program->datatypes_range()) {
+        assert(datatype->constructors_size() > 0);
+        bctx.insertDataType(datatype->getTypeName(), datatype);
+        for (DataConstructor *cons : datatype->constructors_range()) {
+            bctx.insertDataConstructor(cons->getName(), cons, materializeDataConstructor(datatype, cons, m, builder, bctx));
         }
     }
 
