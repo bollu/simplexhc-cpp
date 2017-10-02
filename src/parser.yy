@@ -164,7 +164,7 @@ atoms_:
 atomlist: OPENPAREN atoms_ CLOSEPAREN | OPENPAREN CLOSEPAREN
 
 // Alternates
-altlist: altlist alt { add_alt_to_list($2); }
+altlist: altlist alt SEMICOLON { add_alt_to_list($2); }
          | alt SEMICOLON { add_alt_to_list($1); }
 
 alt: 
