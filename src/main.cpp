@@ -367,7 +367,7 @@ void materializeConstructor(const ExpressionConstructor *c, Module &m,
     unsigned i = 0;
     for (Atom *a : c->args_range()) {
         AtomInt *ai = cast<AtomInt>(a);
-        std::vector<Value *> idxs = {builder.getInt64(0), builder.getInt32(0)};
+        std::vector<Value *> idxs = {builder.getInt64(0), builder.getInt32(i)};
         Value *indexedMem = builder.CreateGEP(
             typedMem, idxs, "indexedmem_" + std::to_string(i));
 
@@ -419,7 +419,6 @@ Function *materializeCaseConstructorAlt(const ExpressionCase *c, Module &m,
             // Declaration and destructuring param sizes should match.
             assert(Decl->types_size() == d->variables_size());
             for (Identifier var : d->variables_range()) {
-                assert(i == 0); 
                 SmallVector<Value *, 2> Idxs = { builder.getInt64(0), builder.getInt32(i) };
                 Value *Slot = builder.CreateGEP(StructPtr, Idxs, "slot_int_" + std::to_string(i));
                 Value *V = builder.CreateLoad(Slot, "arg_int_" + std::to_string(i));
@@ -429,9 +428,9 @@ Function *materializeCaseConstructorAlt(const ExpressionCase *c, Module &m,
                     assert(false &&
                            "umimplemented destructuring for non int types");
                 }
-                materializeExpr(a->getRHS(), m, builder, bctx);
                 i++;
             }
+            materializeExpr(a->getRHS(), m, builder, bctx);
             bctx.popScope();
 
         } else {
