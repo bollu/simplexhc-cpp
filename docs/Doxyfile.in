@@ -1,0 +1,4 @@
+OUTPUT_DIRECTORY       = @CMAKE_CURRENT_BINARY_DIR@/doc_doxygen/
+INPUT                  = @CMAKE_CURRENT_SOURCE_DIR@/src/ @CMAKE_CURRENT_SOURCE_DIR@/docs
+HTML_EXTRA_STYLESHEET                  = @CMAKE_CURRENT_SOURCE_DIR@/docs/customdoxygen.css
+LAYOUT_FILE = @CMAKE_CURRENT_BINARY_DIR@/docs/DoxygenLayout.xml
