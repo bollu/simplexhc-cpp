@@ -102,19 +102,19 @@ class Scope {
 
     void pushScope() {
         if (!inner) {
-            inner = Optional<Scope<K, V>>(new Scope());
+            inner = Optional<Scope<K, V> *>(new Scope());
         } else {
-            inner->pushScope();
+            inner.getValue()->pushScope();
         }
     }
 
     void popScope() {
         assert(inner && "calling popScope on the innermost scope");
-        if (inner->isInnermostScope()) {
+        if (inner.getValue()->isInnermostScope()) {
             inner = None;
         }
         else {
-            inner->popScope();
+            inner.getValue()->popScope();
         }
     }
 
@@ -172,8 +172,31 @@ struct BuildCtx {
         // *** Return */
     }
 
+    // map a binding to a function in the given scope.
     void insertBinding(Binding *b, Function *f) { 
         identifiermap.insert(b->getName(), f);
+    }
+
+    // map an identifier to a value in the current scope.
+    void insertIdentifier(Identifier ident, Value *v) {
+        identifiermap.insert(ident, v);
+    }
+
+    // lookup an identifier form the current scope
+    Value *getIdentifier(Identifier ident) {
+        auto It =  identifiermap.find(ident);
+        assert(It != identifiermap.end());
+        return It->second;
+    }
+
+    // push a scope for identifier resolution
+    void pushScope() {
+        identifiermap.pushScope();
+    }
+
+    // pop a scope for identifier resolution
+    void popScope() {
+        identifiermap.popScope();
     }
 
     Function *getFunctionFromName(std::string name) const {
@@ -189,6 +212,8 @@ struct BuildCtx {
         return cast<Function>(V);
     }
 
+    // TODO: this cannot be structType because we can have things like
+    // PrimInt. This is an abuse and I should fix this.
     void insertType(std::string name, DataDeclaration *decl, Type *type) {
         typemap[name] = std::make_pair(decl, type);
     }
@@ -300,6 +325,7 @@ Value *materializeAtomInt(const AtomInt *i, StgIRBuilder &builder,
 
 Value *materializeAtomIdent(const AtomIdent *id, StgIRBuilder &builder,
                             BuildCtx &bctx) {
+    return bctx.getIdentifier(id->getIdent());
     assert(false && "umimplemented materialization of identifier atom");
 }
 
@@ -374,20 +400,31 @@ Function *materializeCaseConstructorAlt(const ExpressionCase *c, Module &m,
     assert(c->alts_size() == 1);
     for (CaseAlt *a : c->alts_range()) {
         if (CaseAltDestructure *d = dyn_cast<CaseAltDestructure>(a)) {
+            // TODO: create an RTTI class that does the push/pop automatically
+            bctx.pushScope();
+
             // TODO: check that we have the correct destructured value
             // TODO: create Scope :P
             int i = 0;
-            DataDeclaration *Decl =
-                bctx.getTypeFromName(d->getConstructorName()).first;
+            DataDeclaration *Decl;
+            Type *T;
+            std::tie(Decl, T) = bctx.getTypeFromName(d->getConstructorName());
+            // a constructor will have a StructType. If not, this deserves
+            // to blow up. TODO: make this safe.
+            StructType *DeclTy = cast<StructType>(T);
+
+            Value *MemAddr = builder.CreateCall(bctx.popInt, {}, "memaddr");
+            Value *StructPtr = builder.CreateIntToPtr(MemAddr, DeclTy->getPointerTo(), "structptr");
+
             // Declaration and destructuring param sizes should match.
             assert(Decl->types_size() == d->variables_size());
-            std::map<Identifier, Value *> DestructuredVals;
             for (Identifier var : d->variables_range()) {
-                assert(i == 0);
-
+                assert(i == 0); 
+                SmallVector<Value *, 2> Idxs = { builder.getInt64(0), builder.getInt32(i) };
+                Value *Slot = builder.CreateGEP(StructPtr, Idxs, "slot_int_" + std::to_string(i));
+                Value *V = builder.CreateLoad(Slot, "arg_int_" + std::to_string(i));
                 if (*Decl->getTypeName(i) == "PrimInt") {
-                    DestructuredVals[var] = builder.CreateCall(
-                        bctx.popInt, {}, "arg_int_" + std::to_string(i));
+                    bctx.insertIdentifier(var, V);
                 } else {
                     assert(false &&
                            "umimplemented destructuring for non int types");
@@ -395,6 +432,7 @@ Function *materializeCaseConstructorAlt(const ExpressionCase *c, Module &m,
                 materializeExpr(a->getRHS(), m, builder, bctx);
                 i++;
             }
+            bctx.popScope();
 
         } else {
             assert(false && "unimplemented.");
