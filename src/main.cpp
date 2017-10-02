@@ -515,6 +515,7 @@ Function *materializeCaseConstructorAlts(const ExpressionCase *c, Module &m,
                 switch_->addCase(builder.getInt64(Tag), bb);
                 materializeCaseConstructorAltDestructure(c, d, MemAddr, m, builder,
                                                          bctx);
+                builder.CreateRetVoid();
                 break;
             }
             case CaseAlt::CAK_Int:
@@ -525,7 +526,6 @@ Function *materializeCaseConstructorAlts(const ExpressionCase *c, Module &m,
                 break;
         }
     }
-    builder.CreateRetVoid();
     return f;
 }
 
