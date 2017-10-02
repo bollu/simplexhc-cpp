@@ -17,7 +17,7 @@ extern int g_lexer_success;
 extern int g_lexer_line_num;
 
 void yyerror(const char *s) {
-  printf("line %d: %s\n", g_lexer_line_num, s);
+  fprintf(stderr, "line %d: %s\n", g_lexer_line_num, s);
   g_lexer_success = 0;
 }
 
@@ -85,7 +85,6 @@ void add_data_constructor_to_list(DataConstructor *b) {
 %token <atom>	ATOMINT
 %token <constructorName> CONSTRUCTORNAME
 %token <atom>	ATOMSTRING
-%token END ENDL
 
 %type <program> program
 %type <binding> binding
@@ -151,8 +150,8 @@ topleveldefn:
   | datatype { g_datatypes.push_back($1); }
 
 program:
-  program topleveldefn lines
-  | topleveldefn lines
+  program topleveldefn
+  | topleveldefn
 
 atom: 
   ATOMINT | ATOMSTRING
@@ -229,10 +228,8 @@ expr:
     g_atoms.clear();
     delete $1;
   }
-  | CASE atom OF lines altlist { $$ = new stg::ExpressionCase($2, g_alts); 
+  | CASE atom OF altlist { $$ = new stg::ExpressionCase($2, g_alts); 
                                  g_alts.clear();}
 
-lines:
-  lines ENDL |  ENDL
 %%
 

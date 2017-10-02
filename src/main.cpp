@@ -645,7 +645,7 @@ int compile_program(stg::Program *program, int argc, char **argv) {
         bctx.insertBinding(b, materializeBinding(b, m, builder, bctx));
     }
 
-    m.print(errs(), nullptr);
+    m.print(outs(), nullptr);
 
     if (argc != 1) {
         assert(argc == 2);

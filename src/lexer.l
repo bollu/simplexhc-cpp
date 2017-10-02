@@ -39,23 +39,21 @@ int compile_program(stg::Program *p, int argc, char **argv);
 
 [ \t]          ;
 
-[0-9]+           { cout << "Found an integer:" << yytext << endl;
+[0-9]+           { 
                     yylval.atom= new AtomInt(atoi(yytext));
                     return ATOMINT;
                  }
-[a-z][a-zA-Z0-9]*     { cout << "Found ident: " << yytext << endl;
+[a-z][a-zA-Z0-9]*     {
                     yylval.atom = new AtomIdent(yytext);
                     return ATOMSTRING;
                  }
-[A-Z][a-zA-Z0-9]*     { cout << "Found a constructor name: " << yytext << endl;
+[A-Z][a-zA-Z0-9]*     {
                     yylval.constructorName = new std::string(yytext);
                     return CONSTRUCTORNAME;
                  }
 
-\n             { ++g_lexer_line_num; return ENDL; }
-
-
-
+#.*           { /* DO NOTHING */ }
+\n             { ++g_lexer_line_num; }
 %%
 
 int yywrap(void) {
