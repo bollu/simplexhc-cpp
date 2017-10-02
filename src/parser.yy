@@ -27,8 +27,10 @@ std::vector<Binding *> g_bindings;
 std::vector<DataDeclaration *> g_datadeclarations;
 std::vector<Parameter *> g_params;
 std::vector<std::string *>g_types;
+std::vector<DataDeclarationBranch *>g_datadeclarationbranches;
 stg::Program *g_program;
 
+std::string *g_datadeclaration_name;
 std::vector<Identifier> g_alt_destructure_vars;
 
 
@@ -43,6 +45,10 @@ void add_alt_to_list(CaseAlt *a) {
 void add_param_to_list(Parameter *p) {
   g_params.push_back(p);
 }
+
+void add_data_declaration_branch_to_list(DataDeclarationBranch *b) {
+  g_datadeclarationbranches.push_back(b);
+}
 %}
 
 %union{
@@ -53,6 +59,7 @@ void add_param_to_list(Parameter *p) {
   stg::Binding *binding;
   stg::DataDeclaration *datadeclaration;
   stg::Parameter *param;
+  stg::DataDeclarationBranch *datadeclarationbranch;
   std::string *constructorName;
 
   bool UNDEF;
@@ -66,6 +73,7 @@ void add_param_to_list(Parameter *p) {
 %token SEMICOLON
 %token COLON
 %token THINARROW
+%token PIPE
 %token EOFTOKEN
 %token LAMBDA
 %token OPENFLOWER
@@ -85,6 +93,7 @@ void add_param_to_list(Parameter *p) {
 %type <expr> expr
 %type <atom> atom
 %type <datadeclaration> datadeclaration
+%type <datadeclarationbranch> datadeclarationbranch
 
 %type <UNDEF> atoms_;
 %type <UNDEF> altlist;
@@ -106,19 +115,36 @@ toplevel:
                   g_program = new stg::Program(g_bindings, g_datadeclarations); }
 
 binding:
-  BINDING ATOMSTRING ASSIGN lambda { $$ = new stg::Binding(cast<AtomIdent>($2)->getIdent(), $4); };
+  BINDING ATOMSTRING ASSIGN lambda SEMICOLON { $$ = new stg::Binding(cast<AtomIdent>($2)->getIdent(), $4); };
 
+
+
+// Data declaration
 typeslist_:
   typeslist_ CONSTRUCTORNAME { g_types.push_back($2); }
   | CONSTRUCTORNAME { g_types.push_back($1); }
 typeslist: OPENPAREN CLOSEPAREN | OPENPAREN typeslist_ CLOSEPAREN
 
 
-datadeclaration:
-  DATA CONSTRUCTORNAME typeslist { 
-    $$ = new stg::DataDeclaration(*$2, g_types);
+datadeclarationbranch:
+  CONSTRUCTORNAME typeslist { 
+    $$ = new stg::DataDeclarationBranch(*$1, g_types);
     g_types.clear();
   }
+
+datadeclarationbranchlist: 
+                datadeclarationbranchlist PIPE datadeclarationbranch 
+           {
+                add_data_declaration_branch_to_list($3);
+           }
+           | datadeclarationbranch {
+                add_data_declaration_branch_to_list($1);
+            }
+datadeclaration: DATA CONSTRUCTORNAME { g_datadeclaration_name = $2; } ASSIGN datadeclarationbranchlist SEMICOLON {
+               $$ = new stg::DataDeclaration(*g_datadeclaration_name, g_datadeclarationbranches);
+               g_datadeclarationbranches.clear();
+               delete g_datadeclaration_name;
+               }
 
 topleveldefn:
   binding { g_bindings.push_back($1); }

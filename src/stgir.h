@@ -13,7 +13,7 @@ using ConstructorName = std::string;
 using TypeName = std::string;
 
 // *** Data declaration
-class DataDeclaration {
+class DataDeclarationBranch {
    public:
     using TypeList = SmallVector<TypeName *, 4>;
 
@@ -22,7 +22,7 @@ class DataDeclaration {
     TypeList types;
 
    public:
-    DataDeclaration(ConstructorName name, ArrayRef<TypeName *> typesref)
+    DataDeclarationBranch(ConstructorName name, ArrayRef<TypeName *> typesref)
         : name(name) {
         for (TypeName *t : typesref) {
             types.push_back(t);
@@ -39,9 +39,7 @@ class DataDeclaration {
     const_iterator types_begin() const { return types.begin(); }
     const_iterator types_end() const { return types.end(); }
 
-    const TypeName *getTypeName(size_t i) const {
-        return types[i];
-    }
+    const TypeName *getTypeName(size_t i) const { return types[i]; }
 
     iterator_range<iterator> types_range() {
         return make_range<iterator>(types_begin(), types_end());
@@ -55,7 +53,49 @@ class DataDeclaration {
 
     void print(std::ostream &os) const;
     friend std::ostream &operator<<(std::ostream &os,
+                                    const DataDeclarationBranch &branch);
+};
+
+class DataDeclaration {
+   public:
+    using DataDeclarationBranchList = SmallVector<DataDeclarationBranch *, 4>;
+    using iterator = DataDeclarationBranchList::iterator;
+    using const_iterator = DataDeclarationBranchList::const_iterator;
+
+   private:
+    DataDeclarationBranchList branches;
+    TypeName name;
+
+   public:
+    DataDeclaration(TypeName name,
+                    ArrayRef<DataDeclarationBranch *> branchesref)
+        : name(name) {
+        for (DataDeclarationBranch *b : branchesref) {
+            branches.push_back(b);
+        }
+    }
+    iterator begin() { return branches.begin(); }
+    const_iterator begin() const { return branches.begin(); }
+
+    iterator end() { return branches.end(); }
+    const_iterator end() const { return branches.end(); }
+    size_t branches_size() { return branches.size(); }
+
+    TypeName getTypeName() const { return name; }
+
+    iterator_range<iterator> branches_range() { return make_range(begin(), end()); }
+    iterator_range<const_iterator> branches_range() const { return make_range(begin(), end()); }
+
+    void print(std::ostream &os) const;
+    friend std::ostream &operator<<(std::ostream &os,
                                     const DataDeclaration &decl);
+    unsigned getIndexForBranch(const DataDeclarationBranch *needle) const {
+        for(int i = 0; i < branches.size(); i++) {
+            if (branches[i] == needle)  return i;
+        }
+
+        assert(false && "unknown branch variant asked for data declaration");
+    }
 };
 
 // *** Atom ***
@@ -247,12 +287,13 @@ class CaseAltDestructure : public CaseAlt {
     VariableList vars;
 
    public:
-    CaseAltDestructure(ConstructorName constructorName, ArrayRef<Identifier> varsref, Expression *rhs) : CaseAlt(CAK_Destructure, rhs), constructorName(constructorName) {
-        for(Identifier var : varsref)
-            vars.push_back(var);
+    CaseAltDestructure(ConstructorName constructorName,
+                       ArrayRef<Identifier> varsref, Expression *rhs)
+        : CaseAlt(CAK_Destructure, rhs), constructorName(constructorName) {
+        for (Identifier var : varsref) vars.push_back(var);
     }
 
-    const_iterator begin() const { return vars.begin(); } 
+    const_iterator begin() const { return vars.begin(); }
     const_iterator end() const { return vars.end(); }
     iterator_range<const_iterator> variables_range() const {
         return make_range(begin(), end());

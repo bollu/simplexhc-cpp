@@ -122,7 +122,7 @@ struct BuildCtx {
     using IdentifierMapTy = Scope<Identifier, Value *>;
 
     using TypeMapTy =
-        std::map<ConstructorName, std::pair<DataDeclaration *, Type *>>;
+        std::map<ConstructorName, std::tuple<DataDeclaration *, DataDeclarationBranch *, Type *>>;
 
     Function *printInt, *popInt, *pushInt;
     Function *malloc;
@@ -203,27 +203,16 @@ struct BuildCtx {
 
     // TODO: this cannot be structType because we can have things like
     // PrimInt. This is an abuse and I should fix this.
-    void insertType(std::string name, DataDeclaration *decl, Type *type) {
-        typemap[name] = std::make_pair(decl, type);
+    void insertType(std::string name, DataDeclaration *decl, DataDeclarationBranch *branch,  Type *type) {
+        errs() << __PRETTY_FUNCTION__ << " inserting: " << name << "\n";
+        typemap[name] = std::make_tuple(decl, branch, type);
     }
 
-    std::pair<DataDeclaration *, Type *> getTypeFromName(
+    std::tuple<DataDeclaration *, DataDeclarationBranch*, Type *> getTypeFromName(
         std::string name) const {
         auto It = typemap.find(name);
         if (It == typemap.end()) {
-            cerr << __PRETTY_FUNCTION__ << " |unknown type with name: " << name
-                 << "\n";
-            errs() << "TypeMap:\n";
-            // TODO: teach my types to use LLVM streams.
-            for (auto It : typemap) {
-                errs() << It.first << " -> ";
-                if (It.second.first)
-                    cerr << *(It.second.first);
-                else
-                    errs() << "nullptr";
-                errs() << ", " << *(It.second.second) << "\n";
-            }
-            errs() << "---\n";
+            errs() << "unknown name: " << name << "\n";
             assert(false && "unknown type name");
         }
         return It->second;
@@ -235,7 +224,7 @@ struct BuildCtx {
 
     static void populateIntrinsicTypes(Module &m, StgIRBuilder &builder,
                                        TypeMapTy &map) {
-        map["PrimInt"] = std::make_pair(nullptr, builder.getInt64Ty());
+        map["PrimInt"] = std::make_tuple(nullptr, nullptr, builder.getInt64Ty());
     }
 
     static void addStack(Module &m, StgIRBuilder &builder, Type *elemTy,
@@ -349,16 +338,17 @@ void materializeConstructor(const ExpressionConstructor *c, Module &m,
         TotalSize += 4;  // bytes.
     }
     DataDeclaration *decl;
+    DataDeclarationBranch *branch;
     Type *structType;
     
-    std::tie(decl, structType) = bctx.getTypeFromName(c->getName());
+    std::tie(decl, branch, structType) = bctx.getTypeFromName(c->getName());
     Value *rawMem = builder.CreateCall(bctx.malloc,
                                        {builder.getInt64(TotalSize)}, "rawmem");
     Value *typedMem =
         builder.CreateBitCast(rawMem, structType->getPointerTo(), "typedmem");
 
-    // const int Tag = decl->getIndexForTypeName(c->getName());
-    const int Tag = 0;
+    
+    const int Tag = decl->getIndexForBranch(branch);
     Value *tagIndex = builder.CreateGEP(
             typedMem, {builder.getInt64(0), builder.getInt32(0)}, "tag_index");
     builder.CreateStore(builder.getInt64(Tag), tagIndex);
@@ -398,9 +388,11 @@ void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
     // TODO: check that we have the correct destructured value
     // TODO: create Scope :P
     int i = 0;
-    DataDeclaration *Decl;
+    DataDeclaration *decl;
+    DataDeclarationBranch *branch;
+
     Type *T;
-    std::tie(Decl, T) = bctx.getTypeFromName(d->getConstructorName());
+    std::tie(decl, branch, T) = bctx.getTypeFromName(d->getConstructorName());
     // a constructor will have a StructType. If not, this deserves
     // to blow up. TODO: make this safe.
     StructType *DeclTy = cast<StructType>(T);
@@ -411,7 +403,7 @@ void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
         builder.CreateIntToPtr(MemAddr, DeclTy->getPointerTo(), "structptr");
 
     // Declaration and destructuring param sizes should match.
-    assert(Decl->types_size() == d->variables_size());
+    assert(branch->types_size() == d->variables_size());
     for (Identifier var : d->variables_range()) {
         // We need i+1 because 0th slot is used for type.
         SmallVector<Value *, 2> Idxs = {builder.getInt64(0),
@@ -419,7 +411,7 @@ void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
         Value *Slot =
             builder.CreateGEP(StructPtr, Idxs, "slot_int_" + std::to_string(i));
         Value *V = builder.CreateLoad(Slot, "arg_int_" + std::to_string(i));
-        if (*Decl->getTypeName(i) == "PrimInt") {
+        if (*branch->getTypeName(i) == "PrimInt") {
             bctx.insertIdentifier(var, V);
         } else {
             assert(false && "umimplemented destructuring for non int types");
@@ -538,17 +530,19 @@ Function *materializeBinding(const Binding *b, Module &m, StgIRBuilder &builder,
     return F;
 }
 
-StructType *materializeDataDeclaration(const DataDeclaration *decl,
+
+StructType *materializeDataDeclarationBranch(const DataDeclaration *decl,
+                                        const DataDeclarationBranch *b, 
                                        const Module &m, StgIRBuilder &builder,
                                        const BuildCtx &bctx) {
     std::vector<Type *> Elements;
     Elements.push_back(builder.getInt64Ty());  // TAG.
-    for (TypeName *Name : decl->types_range()) {
-        Elements.push_back(bctx.getTypeFromName(*Name).second);
+    for (TypeName *Name : b->types_range()) {
+        Elements.push_back(get<2>(bctx.getTypeFromName(*Name)));
     }
 
     StructType *Ty =
-        StructType::create(m.getContext(), Elements, decl->getName());
+        StructType::create(m.getContext(), Elements, decl->getTypeName() + "_variant_" + b->getName());
     return Ty;
 };
 
@@ -562,8 +556,13 @@ int compile_program(stg::Program *program, int argc, char **argv) {
 
     Binding *entrystg = nullptr;
     for (DataDeclaration *decl : program->declarations_range()) {
-        bctx.insertType(decl->getName(), decl,
-                        materializeDataDeclaration(decl, m, builder, bctx));
+        cout << "decl: " << *decl << "\n";
+        assert(decl->branches_size() > 0);
+        for(DataDeclarationBranch *branch : decl->branches_range()) {
+            cout << "\tbranch: " << *branch << "\n";
+            bctx.insertType(branch->getName(), decl, branch, 
+                    materializeDataDeclarationBranch(decl,  branch, m, builder, bctx));
+        }
     }
 
     for (Binding *b : program->bindings_range()) {

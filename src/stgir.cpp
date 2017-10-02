@@ -8,7 +8,7 @@ void printSepBy(std::ostream &os, std::string prefix, ArrayRef<T *> ts, std::str
 
   for(int i = 0; i < ts.size(); i++) {
     os << *ts[i];
-    if (i < (int)ts.size() - 2) {
+    if (i <= (int)ts.size() - 2) {
       os << separator;
     }
 
@@ -22,18 +22,30 @@ void printSepBy(std::ostream &os, std::string prefix, ArrayRef<T> ts, std::strin
 
   for(int i = 0; i < ts.size(); i++) {
     os << ts[i];
-    if (i < (int)ts.size() - 2) {
+    if (i <= (int)ts.size() - 2) {
       os << separator;
     }
 
   }
   os << postfix;
 }
-// DataDeclaration
+// DataDeclarationBranch
+void DataDeclarationBranch::print(std::ostream &os) const {
+  os << name;
+  printSepBy(os, "(", ArrayRef<TypeName *>(types), " ", ")");
+};
+
+std::ostream &stg::operator <<(std::ostream &os, const DataDeclarationBranch &decl) {
+  decl.print(os);
+  return os;
+}
+
+// DataDeclraation
 void DataDeclaration::print(std::ostream &os) const {
   os << "data ";
   os << name;
-  printSepBy(os, "(", ArrayRef<TypeName *>(types), " ", ")");
+  os << " = ";
+  printSepBy(os, "", ArrayRef<DataDeclarationBranch *>(branches), "|", "");
 };
 
 std::ostream &stg::operator <<(std::ostream &os, const DataDeclaration &decl) {

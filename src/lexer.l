@@ -32,6 +32,7 @@ int compile_program(stg::Program *p, int argc, char **argv);
 "case"         return CASE;
 ";"            return SEMICOLON;
 "->"           return THINARROW;
+"|"            return PIPE;
 "\\"           return LAMBDA;
 "binding"      return BINDING;
 "data"         return DATA;
