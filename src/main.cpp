@@ -123,7 +123,7 @@ struct BuildCtx {
 
     // a map from data constructors to the underlying DataConstructor
     using DataConstructorMap =
-        std::map<ConstructorName, std::tuple<DataConstructor *, Type*>>;
+        std::map<ConstructorName, std::tuple<DataConstructor *, Type *>>;
 
     // a map from data types to their underlying DataType.
     using DataTypeMap = std::map<TypeName, DataType *>;
@@ -206,12 +206,13 @@ struct BuildCtx {
 
     // TODO: this cannot be structType because we can have things like
     // PrimInt. This is an abuse and I should fix this.
-    void insertDataConstructor(std::string name, DataConstructor *cons, Type *type) {
+    void insertDataConstructor(std::string name, DataConstructor *cons,
+                               Type *type) {
         dataConstructorMap[name] = std::make_pair(cons, type);
     }
 
-    std::pair<DataConstructor *, Type *>
-    getDataConstructorFromName(std::string name) const {
+    std::pair<DataConstructor *, Type *> getDataConstructorFromName(
+        std::string name) const {
         auto It = dataConstructorMap.find(name);
         if (It == dataConstructorMap.end()) {
             errs() << "unknown name: " << name << "\n";
@@ -223,8 +224,7 @@ struct BuildCtx {
         dataTypeMap[name] = datatype;
     }
 
-    DataType *
-    getDataTypeName(std::string name) const {
+    DataType *getDataTypeName(std::string name) const {
         auto It = dataTypeMap.find(name);
         if (It == dataTypeMap.end()) {
             errs() << "unknown name: " << name << "\n";
@@ -239,7 +239,8 @@ struct BuildCtx {
     DataTypeMap dataTypeMap;
 
     static void populateIntrinsicTypes(Module &m, StgIRBuilder &builder,
-                                       DataTypeMap &typemap, DataConstructorMap &consmap) {
+                                       DataTypeMap &typemap,
+                                       DataConstructorMap &consmap) {
         DataConstructor *cons = new DataConstructor("PrimInt", {});
         consmap["PrimInt"] = std::make_pair(cons, builder.getInt64Ty());
 
@@ -365,7 +366,7 @@ void materializeConstructor(const ExpressionConstructor *c, Module &m,
     Value *typedMem =
         builder.CreateBitCast(rawMem, structType->getPointerTo(), "typedmem");
 
-    const int Tag = 0;
+    const int Tag = cons->getParent()->getIndexForConstructor(cons);
     Value *tagIndex = builder.CreateGEP(
         typedMem, {builder.getInt64(0), builder.getInt32(0)}, "tag_index");
     builder.CreateStore(builder.getInt64(Tag), tagIndex);
@@ -397,6 +398,7 @@ void materializeConstructor(const ExpressionConstructor *c, Module &m,
 // Assumes that the builder is focused on the correct basic block.
 void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
                                               const CaseAltDestructure *d,
+                                              Value *MemAddr, 
                                               Module &m, StgIRBuilder &builder,
                                               BuildCtx &bctx) {
     // TODO: create an RTTI class that does the push/pop automatically
@@ -409,12 +411,11 @@ void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
     DataConstructor *cons;
 
     Type *T;
-    std::tie(cons, T) = bctx.getDataConstructorFromName(d->getConstructorName());
+    std::tie(cons, T) =
+        bctx.getDataConstructorFromName(d->getConstructorName());
     // a constructor will have a StructType. If not, this deserves
     // to blow up. TODO: make this safe.
     StructType *DeclTy = cast<StructType>(T);
-
-    Value *MemAddr = builder.CreateCall(bctx.popInt, {}, "memaddr");
 
     Value *StructPtr =
         builder.CreateIntToPtr(MemAddr, DeclTy->getPointerTo(), "structptr");
@@ -439,28 +440,11 @@ void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
     bctx.popScope();
 }
 
-void materializeCaseConstructorAlt(const ExpressionCase *c, const CaseAlt *a,
-                                   Module &m, StgIRBuilder &builder,
-                                   BuildCtx &bctx) {
-    switch (a->getKind()) {
-        case CaseAlt::CAK_Destructure:
-            materializeCaseConstructorAltDestructure(
-                c, cast<CaseAltDestructure>(a), m, builder, bctx);
-            break;
-        case CaseAlt::CAK_Int:
-            assert(false && "case of a non-int scrutinee cannot have int");
-            break;
-        case CaseAlt::CAK_Variable:
-            assert(false && "unimplemented");
-            break;
-    }
-}
-
-static DataType *getCommonDataDeclarationFromAlts(
-    const ExpressionCase *c, const StgIRBuilder &builder,
-    const BuildCtx &bctx) {
-    DataType *commondecl = nullptr;
-    auto setCommonType = [&](DataType *newdecl) -> void {
+static const DataType *getCommonDataTypeFromAlts(const ExpressionCase *c,
+                                                 const StgIRBuilder &builder,
+                                                 const BuildCtx &bctx) {
+    const DataType *commondecl = nullptr;
+    auto setCommonType = [&](const DataType *newdecl) -> void {
         if (commondecl == nullptr) {
             commondecl = newdecl;
             return;
@@ -471,6 +455,10 @@ static DataType *getCommonDataDeclarationFromAlts(
 
     for (CaseAlt *a : c->alts_range()) {
         if (CaseAltDestructure *destructure = dyn_cast<CaseAltDestructure>(a)) {
+            const DataConstructor *dc =
+                std::get<0>(bctx.getDataConstructorFromName(
+                    destructure->getConstructorName()));
+            setCommonType(dc->getParent());
         } else if (CaseAltInt *i = dyn_cast<CaseAltInt>(a)) {
             assert(false && "unimplemented type deduction");
         } else if (CaseAltVariable *d = dyn_cast<CaseAltVariable>(a)) {
@@ -489,19 +477,56 @@ Function *materializeCaseConstructorAlts(const ExpressionCase *c, Module &m,
                                          StgIRBuilder &builder,
                                          BuildCtx &bctx) {
     const Identifier scrutinee = cast<AtomIdent>(c->getScrutinee())->getIdent();
-    Function *handler = getOrCreateFunction(
+    Function *f = getOrCreateFunction(
         m, FunctionType::get(builder.getVoidTy(), {}, /*isVarArg=*/false),
         "case_alt_" + scrutinee);
-    BasicBlock *Entry = BasicBlock::Create(m.getContext(), "entry", handler);
-    builder.SetInsertPoint(Entry);
+    BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", f);
+    builder.SetInsertPoint(entry);
 
+    const DataType *dataType = getCommonDataTypeFromAlts(c, builder, bctx);
 
+    Value *MemAddr = builder.CreateCall(bctx.popInt, {}, "memaddr");
+
+    Value *TagPtr = builder.CreateIntToPtr(
+        MemAddr, builder.getInt64Ty()->getPointerTo(), "tagptr");
+    // Since we only care about the tag, we can convert to i64 and forget about
+    // the rest.
+    Value *Tag = builder.CreateLoad(TagPtr, "tag");
+
+    BasicBlock *failure = BasicBlock::Create(m.getContext(), "failure", f);
+    builder.SetInsertPoint(failure);
+    builder.CreateUnreachable();
+
+    builder.SetInsertPoint(entry);
+    SwitchInst *switch_ = builder.CreateSwitch(
+        Tag, failure, /*ncases=*/dataType->constructors_size());
 
     for (CaseAlt *a : c->alts_range()) {
-        materializeCaseConstructorAlt(c, a, m, builder, bctx);
+        switch (a->getKind()) {
+            case CaseAlt::CAK_Destructure: {
+                CaseAltDestructure *d = cast<CaseAltDestructure>(a);
+                BasicBlock *bb = BasicBlock::Create(m.getContext(),
+                                                    d->getConstructorName(), f);
+                builder.SetInsertPoint(bb);
+
+                const int Tag = dataType->getIndexForConstructor(std::get<0>(
+                    bctx.getDataConstructorFromName(d->getConstructorName())));
+                // teach the switch case to switch to this BB on encountering the tag.
+                switch_->addCase(builder.getInt64(Tag), bb);
+                materializeCaseConstructorAltDestructure(c, d, MemAddr, m, builder,
+                                                         bctx);
+                break;
+            }
+            case CaseAlt::CAK_Int:
+                assert(false && "case of a non-int scrutinee cannot have int");
+                break;
+            case CaseAlt::CAK_Variable:
+                assert(false && "unimplemented");
+                break;
+        }
     }
     builder.CreateRetVoid();
-    return handler;
+    return f;
 }
 
 // case over a constructor. Note: this is a HACK, this is not how you should
@@ -568,8 +593,8 @@ Function *materializeBinding(const Binding *b, Module &m, StgIRBuilder &builder,
     Function *F =
         Function::Create(FTy, GlobalValue::ExternalLinkage, b->getName(), &m);
 
-    BasicBlock *Entry = BasicBlock::Create(m.getContext(), "entry", F);
-    builder.SetInsertPoint(Entry);
+    BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
+    builder.SetInsertPoint(entry);
     materializeLambda(b->getRhs(), m, builder, bctx);
     builder.CreateRetVoid();
     return F;
@@ -577,10 +602,9 @@ Function *materializeBinding(const Binding *b, Module &m, StgIRBuilder &builder,
 
 // construct a StructType for a DataConstructor
 StructType *materializeDataConstructor(const DataType *decl,
-                                             const DataConstructor *b,
-                                             const Module &m,
-                                             StgIRBuilder &builder,
-                                             const BuildCtx &bctx) {
+                                       const DataConstructor *b,
+                                       const Module &m, StgIRBuilder &builder,
+                                       const BuildCtx &bctx) {
     std::vector<Type *> Elements;
     Elements.push_back(builder.getInt64Ty());  // TAG.
     for (TypeName *Name : b->types_range()) {
@@ -606,7 +630,9 @@ int compile_program(stg::Program *program, int argc, char **argv) {
         assert(datatype->constructors_size() > 0);
         bctx.insertDataType(datatype->getTypeName(), datatype);
         for (DataConstructor *cons : datatype->constructors_range()) {
-            bctx.insertDataConstructor(cons->getName(), cons, materializeDataConstructor(datatype, cons, m, builder, bctx));
+            bctx.insertDataConstructor(
+                cons->getName(), cons,
+                materializeDataConstructor(datatype, cons, m, builder, bctx));
         }
     }
 

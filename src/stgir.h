@@ -59,7 +59,7 @@ class DataConstructor {
     size_t types_size() const { return types.size(); }
     bool types_empty() const { return types.empty(); }
 
-    const DataType *getParent() {
+    const DataType *getParent() const {
         assert(parent);
         return this->parent;
     }
@@ -93,7 +93,7 @@ class DataType {
 
     iterator end() { return constructors.end(); }
     const_iterator end() const { return constructors.end(); }
-    size_t constructors_size() { return constructors.size(); }
+    size_t constructors_size() const { return constructors.size(); }
 
     TypeName getTypeName() const { return name; }
 
