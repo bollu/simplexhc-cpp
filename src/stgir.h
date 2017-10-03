@@ -371,6 +371,9 @@ class Parameter {
     Parameter(Identifier name, TypeName type) : name(name), type(type){};
     void print(std::ostream &os) const;
     friend std::ostream &operator<<(std::ostream &os, const Parameter &p);
+
+    TypeName getType() const { return type; }
+    Identifier getName() const { return name; }
 };
 
 // *** Lambda ***

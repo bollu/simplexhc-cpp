@@ -594,6 +594,12 @@ void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
     BuildCtx::Scoper scoper(bctx);
     for (const Parameter *p : *l) {
         cout << "parameter: " << *p;
+        if (p->getType() == "PrimInt") {
+            assert(false && "unhandled, functions taking prim ints as params");
+        } else {
+            Value *pv = builder.CreateCall(bctx.popInt, {}, "param_" + p->getName());
+            bctx.insertIdentifier(p->getName(),  pv);
+        }
     }
     materializeExpr(l->getRhs(), m, builder, bctx);
 }
