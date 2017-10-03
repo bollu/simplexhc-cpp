@@ -31,6 +31,7 @@ int compile_program(stg::Program *p, int argc, char **argv);
 "of"           return OF;
 "case"         return CASE;
 ";"            return SEMICOLON;
+":"            return COLON;
 "->"           return THINARROW;
 "|"            return PIPE;
 "\\"           return LAMBDA;
