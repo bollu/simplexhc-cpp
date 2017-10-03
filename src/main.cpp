@@ -182,6 +182,9 @@ struct BuildCtx {
     // lookup an identifier form the current scope
     Value *getIdentifier(Identifier ident) {
         auto It = identifiermap.find(ident);
+        if (It == identifiermap.end()) {
+            cerr << "Unknown identifier: " << ident << "\n";
+        }
         assert(It != identifiermap.end());
         return It->second;
     }
