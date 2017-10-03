@@ -186,11 +186,6 @@ struct BuildCtx {
         return It->second;
     }
 
-    // push a scope for identifier resolution
-    void pushScope() { identifiermap.pushScope(); }
-
-    // pop a scope for identifier resolution
-    void popScope() { identifiermap.popScope(); }
 
     Function *getFunctionFromName(std::string name) const {
         auto It = identifiermap.find(name);
@@ -233,7 +228,23 @@ struct BuildCtx {
         return It->second;
     }
 
+    // Class to create and destroy a scope with RAII.
+    class Scoper {
+        public:
+            Scoper(BuildCtx &bctx) : bctx(bctx) { bctx.pushScope(); };
+            ~Scoper(){ bctx.popScope(); }
+        private:
+            BuildCtx &bctx;
+    };
+
    private:
+    friend class Scoper;
+    // push a scope for identifier resolution
+    void pushScope() { identifiermap.pushScope(); }
+
+    // pop a scope for identifier resolution
+    void popScope() { identifiermap.popScope(); }
+
     IdentifierMapTy identifiermap;
     DataConstructorMap dataConstructorMap;
     DataTypeMap dataTypeMap;
@@ -401,8 +412,7 @@ void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
                                               Value *MemAddr, 
                                               Module &m, StgIRBuilder &builder,
                                               BuildCtx &bctx) {
-    // TODO: create an RTTI class that does the push/pop automatically
-    bctx.pushScope();
+    BuildCtx::Scoper scoper(bctx);
 
     // TODO: check that we have the correct destructured value
     // TODO: create Scope :P
@@ -437,7 +447,6 @@ void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
         i++;
     }
     materializeExpr(d->getRHS(), m, builder, bctx);
-    bctx.popScope();
 }
 
 static const DataType *getCommonDataTypeFromAlts(const ExpressionCase *c,
@@ -580,6 +589,7 @@ void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
 
 void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
                        BuildCtx &bctx) {
+    BuildCtx::Scoper scoper(bctx);
     for (const Parameter *p : *l) {
         cout << "parameter: " << *p;
     }
