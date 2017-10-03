@@ -357,10 +357,9 @@ void materializeAp(const ExpressionAp *ap, Module &m, StgIRBuilder &builder,
     for (Atom *p : *ap) {
         Value *v = materializeAtom(p, builder, bctx);
         builder.CreateCall(bctx.pushInt, {v});
-
-        Function *Cont = bctx.getFunctionFromName(ap->getFnName());
-        CreateTailCall(builder, Cont, {});
     }
+    Function *Cont = bctx.getFunctionFromName(ap->getFnName());
+    CreateTailCall(builder, Cont, {});
 };
 
 void materializeConstructor(const ExpressionConstructor *c, Module &m,
