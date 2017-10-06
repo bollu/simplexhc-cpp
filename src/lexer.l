@@ -37,6 +37,8 @@ int compile_program(stg::Program *p, int argc, char **argv);
 "\\"           return LAMBDA;
 "binding"      return BINDING;
 "data"         return DATA;
+"let"         return LET;
+"in"         return IN;
 
 [ \t]          ;
 

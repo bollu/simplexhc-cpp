@@ -23,7 +23,8 @@ void yyerror(const char *s) {
 
 std::vector<Atom *> g_atoms;
 std::vector<CaseAlt *> g_alts;
-std::vector<Binding *> g_bindings;
+std::vector<Binding *> g_toplevel_bindings;
+std::vector<Binding *> g_let_bindings;
 std::vector<DataType *> g_datatypes;
 std::vector<Parameter *> g_params;
 std::vector<std::string *>g_types;
@@ -32,6 +33,9 @@ stg::Program *g_program;
 
 std::string *g_datadeclaration_name;
 std::vector<Identifier> g_alt_destructure_vars;
+
+
+std::vector<Parameter *> g_lambda_freevars;
 
 
 void add_atom_to_list (Atom *a) {
@@ -80,6 +84,8 @@ void add_data_constructor_to_list(DataConstructor *b) {
 %token CLOSEFLOWER
 %token BINDING
 %token DATA
+%token LET
+%token IN
 
 %start toplevel
 %token <atom>	ATOMINT
@@ -111,7 +117,7 @@ void add_data_constructor_to_list(DataConstructor *b) {
 %%
 toplevel:
         program {
-                  g_program = new stg::Program(g_bindings, g_datatypes); }
+                  g_program = new stg::Program(g_toplevel_bindings, g_datatypes); }
 
 binding:
   BINDING ATOMSTRING ASSIGN lambda SEMICOLON { $$ = new stg::Binding(cast<AtomIdent>($2)->getIdent(), $4); };
@@ -146,7 +152,7 @@ datatype: DATA CONSTRUCTORNAME { g_datadeclaration_name = $2; } ASSIGN dataconst
                }
 
 topleveldefn:
-  binding { g_bindings.push_back($1); }
+  binding { g_toplevel_bindings.push_back($1); }
   | datatype { g_datatypes.push_back($1); }
 
 program:
@@ -215,6 +221,19 @@ lambda:
         $$ = new stg::Lambda(g_params, *$4, $6);
         g_params.clear(); 
       }
+  |
+  // syntax for free vars
+  LAMBDA params {
+      g_lambda_freevars = g_params; g_params.clear(); 
+  } params THINARROW CONSTRUCTORNAME OPENFLOWER expr CLOSEFLOWER {
+
+    $$ = new stg::Lambda(g_lambda_freevars, g_params, *$6, $8);
+    g_params.clear();
+  }
+
+
+letbindings: binding { g_let_bindings.push_back($1); } |
+             letbindings binding { g_let_bindings.push_back($2); }
 
 expr:
   // function application
@@ -230,6 +249,10 @@ expr:
   }
   | CASE atom OF altlist { $$ = new stg::ExpressionCase($2, g_alts); 
                                  g_alts.clear();}
+  | LET letbindings IN expr {
+    $$ =  new stg::ExpressionLet(g_let_bindings, $4);
+    g_let_bindings.clear();
+  }
 
 %%
 

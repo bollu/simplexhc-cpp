@@ -88,7 +88,10 @@ std::ostream &stg::operator<<(std::ostream &os, const Lambda &l) {
 
 void Lambda::print(std::ostream &os) const {
   os << "\\";
-  printSepBy(os, "(", (ArrayRef<Parameter *>)params, " ", ")");
+  if (freeparams.size() > 0)
+      printSepBy(os, "(", (ArrayRef<Parameter *>)freeparams, " ", ") ");
+
+  printSepBy(os, "(", (ArrayRef<Parameter *>)boundparams, " ", ")");
   os << " -> ";
   os << returnType << " ";
   os << "{ ";
@@ -115,6 +118,12 @@ void ExpressionCase::print(std::ostream &os) const {
     os << "endcase\n";
 }
 
+void ExpressionLet::print(std::ostream &os) const {
+    os << "let";
+    printSepBy(os, "\n\t", ArrayRef<Binding*>(bindings), "\n\t", "\n");
+    os << "in";
+    os << *rhs;
+}
 // Case
 
 std::ostream &stg::operator<<(std::ostream &os, const CaseAlt &a) {

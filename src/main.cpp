@@ -193,6 +193,7 @@ struct BuildCtx {
     Function *getFunctionFromName(std::string name) const {
         auto It = identifiermap.find(name);
         if (It == identifiermap.end()) {
+            cerr << "unknown function: " << name << "\n";
             assert(false && "function not found");
         }
         Value *V = It->second;
@@ -592,7 +593,7 @@ void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
 void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
                        BuildCtx &bctx) {
     BuildCtx::Scoper scoper(bctx);
-    for (const Parameter *p : *l) {
+    for (const Parameter *p : l->bound_params_range()) {
         cout << "parameter: " << *p;
         if (p->getType() == "PrimInt") {
             assert(false && "unhandled, functions taking prim ints as params");

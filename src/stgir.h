@@ -80,9 +80,7 @@ class DataType {
     TypeName name;
 
    public:
-    DataType(TypeName name,
-                    ArrayRef<DataConstructor *> consref)
-        : name(name) {
+    DataType(TypeName name, ArrayRef<DataConstructor *> consref) : name(name) {
         for (DataConstructor *c : consref) {
             c->_setParent(this);
             constructors.push_back(c);
@@ -105,14 +103,14 @@ class DataType {
     }
 
     void print(std::ostream &os) const;
-    friend std::ostream &operator<<(std::ostream &os,
-                                    const DataType &decl);
+    friend std::ostream &operator<<(std::ostream &os, const DataType &decl);
     unsigned getIndexForConstructor(const DataConstructor *needle) const {
         for (int i = 0; i < constructors.size(); i++) {
             if (constructors[i] == needle) return i;
         }
 
-        assert(false && "unknown data constructor variant asked for data declaration");
+        assert(false &&
+               "unknown data constructor variant asked for data declaration");
     }
 };
 
@@ -160,7 +158,7 @@ class AtomIdent : public Atom {
 // *** Expression ****
 class Expression {
    public:
-    enum ExpressionKind { EK_Ap, EK_Cons, EK_Case };
+    enum ExpressionKind { EK_Ap, EK_Cons, EK_Case, EK_Let };
     virtual void print(std::ostream &os) const = 0;
     ExpressionKind getKind() const { return kind; }
 
@@ -247,6 +245,31 @@ class ExpressionConstructor : public Expression {
     static bool classof(const Expression *E) {
         return E->getKind() == Expression::EK_Cons;
     }
+};
+
+class Binding;
+class ExpressionLet : public Expression {
+   public:
+    using BindingListTy = SmallVector<Binding *, 2>;
+    using iterator = BindingListTy::iterator;
+    using const_iterator = BindingListTy::const_iterator;
+
+   private:
+    BindingListTy bindings;
+    Expression *rhs;
+
+   public:
+    ExpressionLet(ArrayRef<Binding *> bindingsref, Expression *rhs) : rhs(rhs), 
+    Expression(Expression::EK_Let) {
+        for (Binding *b : bindingsref) {
+            bindings.push_back(b);
+        }
+    }
+    void print(std::ostream &os) const;
+    const Expression *getRHS() { return rhs; }
+    const_iterator begin() { return bindings.begin(); }
+    const_iterator end() { return bindings.end(); }
+    iterator_range<const_iterator> bindings_range() { return bindings; }
 };
 
 // *** Alt ***
@@ -380,18 +403,33 @@ class Parameter {
 class Lambda {
    public:
     using ParamList = SmallVector<Parameter *, 4>;
-    TypeName returnType;
+    using iterator = ParamList::iterator;
+    using const_iterator = ParamList::const_iterator;
 
    private:
-    ParamList params;
+    ParamList boundparams;
+    ParamList freeparams;
     Expression *expr;
+    TypeName returnType;
 
    public:
-    Lambda(ArrayRef<Parameter *> paramsref, TypeName returnType,
+    Lambda(ArrayRef<Parameter *> boundparamsref, TypeName returnType,
            Expression *expr)
         : expr(expr), returnType(returnType) {
-        for (Parameter *p : paramsref) {
-            params.push_back(p);
+        for (Parameter *p : boundparamsref) {
+            boundparams.push_back(p);
+        }
+    }
+
+    Lambda(ArrayRef<Parameter *> freeparamsref,
+           ArrayRef<Parameter *> boundparamsref, TypeName returnType,
+           Expression *expr)
+        : expr(expr), returnType(returnType) {
+        for (Parameter *p : freeparamsref) {
+            freeparams.push_back(p);
+        }
+        for (Parameter *p : boundparamsref) {
+            boundparams.push_back(p);
         }
     }
     void print(std::ostream &os) const;
@@ -399,23 +437,19 @@ class Lambda {
 
     const Expression *getRhs() const { return expr; }
 
-    using iterator = ParamList::iterator;
-    using const_iterator = ParamList::const_iterator;
+    const_iterator bound_params_begin() const { return boundparams.begin(); }
+    const_iterator bound_params_end() const { return boundparams.end(); }
 
-    iterator begin() { return params.begin(); }
-    iterator end() { return params.end(); }
+    iterator_range<const_iterator> bound_params_range() const {
+        return make_range(bound_params_begin(), bound_params_end());
+    }
 
-    const_iterator begin() const { return params.begin(); }
-    const_iterator end() const { return params.end(); }
+    const_iterator free_params_begin() const { return freeparams.begin(); }
+    const_iterator free_params_end() const { return freeparams.end(); }
 
-    size_t size() const { return params.size(); }
-    bool empty() const { return params.empty(); }
-
-    const Parameter *front() const { return params.front(); }
-    Parameter *front() { return params.front(); }
-
-    const Parameter *back() const { return params.back(); }
-    Parameter *back() { return params.back(); }
+    iterator_range<const_iterator> free_params_range() const {
+        return make_range(free_params_begin(), free_params_end());
+    }
 };
 
 // *** Binding ***
