@@ -1,0 +1,11 @@
+# RUN: ./compile-and-run-program.sh %s | FileCheck %s
+# CHECK: 2
+
+data Int  = Int2 (PrimInt PrimInt);
+
+
+binding k = \(x:A y:A) -> A { x () };
+binding main = \() -> Void { let 
+                                binding k1 = \() -> A { k (1) };
+                                binding k12 = \() -> A { k1 (2) };
+                             in printInt (k12) };

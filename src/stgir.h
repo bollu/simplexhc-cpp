@@ -259,17 +259,22 @@ class ExpressionLet : public Expression {
     Expression *rhs;
 
    public:
-    ExpressionLet(ArrayRef<Binding *> bindingsref, Expression *rhs) : rhs(rhs), 
-    Expression(Expression::EK_Let) {
+    ExpressionLet(ArrayRef<Binding *> bindingsref, Expression *rhs)
+        : rhs(rhs), Expression(Expression::EK_Let) {
         for (Binding *b : bindingsref) {
             bindings.push_back(b);
         }
     }
     void print(std::ostream &os) const;
-    const Expression *getRHS() { return rhs; }
-    const_iterator begin() { return bindings.begin(); }
-    const_iterator end() { return bindings.end(); }
-    iterator_range<const_iterator> bindings_range() { return bindings; }
+    const Expression *getRHS() const { return rhs; }
+    const_iterator begin() const { return bindings.begin(); }
+    const_iterator end() const { return bindings.end(); }
+    iterator_range<const_iterator> bindings_range() const {
+        return make_range(begin(), end());
+    }
+    static bool classof(const Expression *E) {
+        return E->getKind() == Expression::EK_Let;
+    }
 };
 
 // *** Alt ***

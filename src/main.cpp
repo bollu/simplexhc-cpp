@@ -26,6 +26,8 @@ using StgIRBuilder = IRBuilder<>;
 
 void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
                      BuildCtx &bctx);
+Function *materializeBinding(const Binding *b, Module &m, StgIRBuilder &builder,
+                             BuildCtx &bctx);
 // http://web.iitd.ac.in/~sumeet/flex__bison.pdf
 // http://aquamentus.com/flex_bison.html
 //
@@ -190,7 +192,7 @@ struct BuildCtx {
     }
 
 
-    Function *getFunctionFromName(std::string name) const {
+    Value *getFunctionFromName(std::string name, StgIRBuilder &builder) const {
         auto It = identifiermap.find(name);
         if (It == identifiermap.end()) {
             cerr << "unknown function: " << name << "\n";
@@ -198,9 +200,15 @@ struct BuildCtx {
         }
         Value *V = It->second;
         if (!isa<Function>(V)) {
-            assert(false && "expected function, found value");
+            Type *StgFunctionTy = FunctionType::get(builder.getVoidTy(), {}, false);
+            errs() << "Found value that is not function: " << *V << ". Transmuting...\n";
+            if (isa<IntegerType>(V->getType())) {
+                V = builder.CreateIntToPtr(V, StgFunctionTy->getPointerTo());
+            }
+            V = builder.CreateBitOrPointerCast(V, StgFunctionTy->getPointerTo());
+            // assert(false && "expected function, found value");
         }
-        return cast<Function>(V);
+        return V;
     }
 
     // TODO: this cannot be structType because we can have things like
@@ -355,11 +363,19 @@ Value *materializeAtom(const Atom *a, StgIRBuilder &builder, BuildCtx &bctx) {
 
 void materializeAp(const ExpressionAp *ap, Module &m, StgIRBuilder &builder,
                    BuildCtx &bctx) {
+    cerr << "materializing:"  << *ap << "\n";
     for (Atom *p : *ap) {
         Value *v = materializeAtom(p, builder, bctx);
+        if (!isa<IntegerType>(v->getType())) {
+            errs() << "HACK: pushing non-int. Let's see how this goes.";
+            v = builder.CreatePtrToInt(v, builder.getInt64Ty());
+
+        };
         builder.CreateCall(bctx.pushInt, {v});
     }
-    Function *Cont = bctx.getFunctionFromName(ap->getFnName());
+    errs() << __PRETTY_FUNCTION__ <<  __LINE__ << "\n";
+    Value *Cont = bctx.getFunctionFromName(ap->getFnName(), builder);
+    errs() << "Cont:"  << *Cont << "\n";
     CreateTailCall(builder, Cont, {});
 };
 
@@ -553,7 +569,7 @@ void materializeCaseConstructor(const ExpressionCase *c, Module &m,
 
     const Identifier scrutinee = cast<AtomIdent>(c->getScrutinee())->getIdent();
     // TODO: come up with a notion of scope.
-    Function *Next = bctx.getFunctionFromName(scrutinee);
+    Value *Next = bctx.getFunctionFromName(scrutinee, builder);
     // push a return continuation for the function `Next` to follow.
     Function *AltHandler = materializeCaseConstructorAlts(c, m, builder, bctx);
 
@@ -574,6 +590,23 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
     }
 }
 
+void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
+                     BuildCtx &bctx) {
+
+
+    BasicBlock *Entry = builder.GetInsertBlock();
+    BuildCtx::Scoper scoper(bctx);
+    for(Binding *b : l->bindings_range())
+        bctx.insertBinding(b, materializeBinding(b, m, builder, bctx));
+
+    errs() << __LINE__ << "---module:\n" << m << __LINE__ << "---\n";
+
+    builder.SetInsertPoint(Entry);
+    materializeExpr(l->getRHS(), m, builder, bctx);
+    errs() << __LINE__ << "---module:\n" << m << __LINE__ << "---\n";
+
+};
+
 void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
                      BuildCtx &bctx) {
     switch (e->getKind()) {
@@ -587,6 +620,9 @@ void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
         case Expression::EK_Case:
             materializeCase(cast<ExpressionCase>(e), m, builder, bctx);
             break;
+        case Expression::EK_Let:
+            materializeLet(cast<ExpressionLet>(e), m, builder, bctx);
+            break;
     };
 }
 
@@ -594,7 +630,6 @@ void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
                        BuildCtx &bctx) {
     BuildCtx::Scoper scoper(bctx);
     for (const Parameter *p : l->bound_params_range()) {
-        cout << "parameter: " << *p;
         if (p->getType() == "PrimInt") {
             assert(false && "unhandled, functions taking prim ints as params");
         } else {
