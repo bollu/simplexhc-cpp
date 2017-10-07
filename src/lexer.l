@@ -69,7 +69,7 @@ int main(int argc, char **argv) {
     } while (!feof(yyin));
     if (g_lexer_success) {
         return compile_program(g_program, argc, argv);
-    }else {
+    } else {
         return 1;
     }
 }

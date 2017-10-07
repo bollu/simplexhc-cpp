@@ -35,7 +35,7 @@ Function *materializeBinding(const Binding *b, Module &m, StgIRBuilder &builder,
 
 // Get a function with name `name`, and if it doesn't exist, create
 // a function with name `name`, type `FTy`, module `m`.
-static Function *getOrCreateFunction(Module &m, FunctionType *FTy,
+static AssertingVH<Function> getOrCreateFunction(Module &m, FunctionType *FTy,
                                      std::string name) {
     Function *F = m.getFunction(name);
     if (F) return F;
@@ -106,6 +106,7 @@ class Scope {
         }
     }
 
+
     void popScope() {
         assert(inner && "calling popScope on the innermost scope");
         if (inner.getValue()->isInnermostScope()) {
@@ -116,12 +117,17 @@ class Scope {
     }
 
     bool isInnermostScope() const { return !inner; }
+
+    ~Scope() {
+        if (inner)
+            delete inner.getPointer();
+    }
 };
 
 static const int stackSize = 5000;
-struct BuildCtx {
+class BuildCtx {
    public:
-    using IdentifierMapTy = Scope<Identifier, Value *>;
+    using IdentifierMapTy = Scope<Identifier, AssertingVH<Value>>;
 
     // a map from data constructors to the underlying DataConstructor
     using DataConstructorMap =
@@ -130,18 +136,18 @@ struct BuildCtx {
     // a map from data types to their underlying DataType.
     using DataTypeMap = std::map<TypeName, DataType *>;
 
-    Function *printInt, *popInt, *pushInt;
-    Function *malloc;
-    Function *pushReturnCont, *popReturnCont;
-    GlobalVariable *stackInt;
-    GlobalVariable *stackIntTop;
+    AssertingVH<Function> printInt, popInt, pushInt;
+    AssertingVH<Function> malloc;
+    AssertingVH<Function> pushReturnCont, popReturnCont;
+    AssertingVH<GlobalVariable> stackInt;
+    AssertingVH<GlobalVariable> stackIntTop;
 
     // type of values in return stack: () -> ()
     Type *ReturnContTy;
     // stack of return values, in reality a large array
-    GlobalVariable *stackReturnCont;
+    AssertingVH<GlobalVariable> stackReturnCont;
     // pointer to offset to top of return stack.
-    GlobalVariable *stackReturnContTop;
+    AssertingVH<GlobalVariable> stackReturnContTop;
 
     BuildCtx(Module &m, StgIRBuilder &builder) {
         populateIntrinsicTypes(m, builder, dataTypeMap, dataConstructorMap);
@@ -150,7 +156,7 @@ struct BuildCtx {
                                        FunctionType::get(builder.getVoidTy(),
                                                          /*isVarArg=*/false),
                                        "printInt");
-        identifiermap.insert("printInt", printInt);
+        identifiermap.insert("printInt", AssertingVH<Value>(printInt));
 
         malloc = getOrCreateFunction(
             m,
@@ -171,6 +177,14 @@ struct BuildCtx {
         // *** Return */
     }
 
+
+    ~BuildCtx() {
+        // delete this->stackReturnCont;
+        // delete this->stackReturnContTop;
+        // delete this->stackInt;
+        // delete this->stackIntTop;
+    }
+
     // map a binding to a function in the given scope.
     void insertBinding(Binding *b, Function *f) {
         identifiermap.insert(b->getName(), f);
@@ -182,7 +196,7 @@ struct BuildCtx {
     }
 
     // lookup an identifier form the current scope
-    Value *getIdentifier(Identifier ident) {
+    AssertingVH<Value> getIdentifier(Identifier ident) {
         auto It = identifiermap.find(ident);
         if (It == identifiermap.end()) {
             cerr << "Unknown identifier: " << ident << "\n";
@@ -192,7 +206,7 @@ struct BuildCtx {
     }
 
 
-    Value *getFunctionFromName(std::string name, StgIRBuilder &builder) const {
+    AssertingVH<Value> getFunctionFromName(std::string name, StgIRBuilder &builder) const {
         auto It = identifiermap.find(name);
         if (It == identifiermap.end()) {
             cerr << "unknown function: " << name << "\n";
@@ -203,10 +217,9 @@ struct BuildCtx {
             Type *StgFunctionTy = FunctionType::get(builder.getVoidTy(), {}, false);
             errs() << "Found value that is not function: " << *V << ". Transmuting...\n";
             if (isa<IntegerType>(V->getType())) {
-                V = builder.CreateIntToPtr(V, StgFunctionTy->getPointerTo());
+                V = builder.CreateIntToPtr(V, StgFunctionTy->getPointerTo(), V->getName() + "_transmute_to_fn");
             }
             V = builder.CreateBitOrPointerCast(V, StgFunctionTy->getPointerTo());
-            // assert(false && "expected function, found value");
         }
         return V;
     }
@@ -272,9 +285,9 @@ struct BuildCtx {
     }
 
     static void addStack(Module &m, StgIRBuilder &builder, Type *elemTy,
-                         std::string name, size_t size, Function *&pushFn,
-                         Function *&popFn, GlobalVariable *&stack,
-                         GlobalVariable *&stackTop) {
+                         std::string name, size_t size, AssertingVH<Function> &pushFn,
+                         AssertingVH<Function> &popFn, AssertingVH<GlobalVariable> &stack,
+                         AssertingVH<GlobalVariable> &stackTop) {
         popFn = getOrCreateFunction(
             m, FunctionType::get(elemTy, /*isVarArg=*/false), "pop" + name);
         pushFn =
@@ -428,7 +441,7 @@ void materializeConstructor(const ExpressionConstructor *c, Module &m,
 // Assumes that the builder is focused on the correct basic block.
 void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
                                               const CaseAltDestructure *d,
-                                              Value *MemAddr, 
+                                              Value *MemAddr,
                                               Module &m, StgIRBuilder &builder,
                                               BuildCtx &bctx) {
     BuildCtx::Scoper scoper(bctx);
@@ -674,9 +687,8 @@ StructType *materializeDataConstructor(const DataType *decl,
 int compile_program(stg::Program *program, int argc, char **argv) {
     cout << "> program: " << *program << "\n";
     LLVMContext ctx;
-    StgIRBuilder builder(ctx);
     Module m("Module", ctx);
-
+    StgIRBuilder builder(ctx);
     BuildCtx bctx(m, builder);
 
     Binding *entrystg = nullptr;

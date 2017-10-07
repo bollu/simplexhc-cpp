@@ -1,5 +1,6 @@
 %{
 #include <math.h>
+#include <stack>
 #include <iostream>
 #include "stgir.h"
 
@@ -16,6 +17,8 @@ extern "C" int yyparse();
 extern int g_lexer_success;
 extern int g_lexer_line_num;
 
+using ParamList = Lambda::ParamList;
+
 void yyerror(const char *s) {
   fprintf(stderr, "line %d: %s\n", g_lexer_line_num, s);
   g_lexer_success = 0;
@@ -26,16 +29,20 @@ std::vector<CaseAlt *> g_alts;
 std::vector<Binding *> g_toplevel_bindings;
 std::vector<Binding *> g_let_bindings;
 std::vector<DataType *> g_datatypes;
-std::vector<Parameter *> g_params;
+ParamList g_params;
 std::vector<std::string *>g_types;
 std::vector<DataConstructor *>g_dataconstructors;
 stg::Program *g_program;
+
+
+std::stack<ParamList> g_params_stack;
+
 
 std::string *g_datadeclaration_name;
 std::vector<Identifier> g_alt_destructure_vars;
 
 
-std::vector<Parameter *> g_lambda_freevars;
+ParamList g_lambda_freevars;
 
 
 void add_atom_to_list (Atom *a) {
@@ -212,22 +219,32 @@ params_:
   | param { add_param_to_list($1); }
 
 params: 
-  OPENPAREN params_ CLOSEPAREN | OPENPAREN CLOSEPAREN
+  OPENPAREN { g_params = {}; }
+  params_ CLOSEPAREN {
+      g_params_stack.push(g_params);
+      g_params = {};
+  }| OPENPAREN CLOSEPAREN {
+    g_params_stack.push(ParamList());
+    g_params = {};
+  }
 
 lambda:
   LAMBDA params THINARROW CONSTRUCTORNAME 
     OPENFLOWER expr CLOSEFLOWER 
       { 
-        $$ = new stg::Lambda(g_params, *$4, $6);
-        g_params.clear(); 
+        $$ = new stg::Lambda(g_params_stack.top(), *$4, $6);
+        g_params_stack.pop()
       }
   |
   // syntax for free vars
-  LAMBDA params {
-      g_lambda_freevars = g_params; g_params.clear(); 
-  } params THINARROW CONSTRUCTORNAME OPENFLOWER expr CLOSEFLOWER {
+  LAMBDA params params THINARROW CONSTRUCTORNAME OPENFLOWER expr CLOSEFLOWER {
 
-    $$ = new stg::Lambda(g_lambda_freevars, g_params, *$6, $8);
+    ParamList boundvars = g_params_stack.top();
+    g_params_stack.pop();
+    ParamList freevars = g_params_stack.top();
+    g_params_stack.pop();
+
+    $$ = new stg::Lambda(freevars, boundvars, *$5, $7);
     g_params.clear();
   }
 

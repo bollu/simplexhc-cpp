@@ -2,12 +2,12 @@
 # CHECK: 3
 
 data Int  = Int2 (PrimInt PrimInt);
-binding k = \(printx:F) (x:Int y:Int) -> Void { printx (x) };
 
 binding i2 = \() -> Int { Int2 (3 4) };
 
 binding printx = \(x:Int) -> Void { printInt (x) };
 
+binding k = \(printx:F) (x:Int y:Int) -> Void { printx (x) };
 
 binding main = \() -> Void { case i2 of
                                 Int2 (x y) ->  k (y x);

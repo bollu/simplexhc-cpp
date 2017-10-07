@@ -1,9 +1,13 @@
 # RUN: ./compile-and-run-program.sh %s | FileCheck %s
-# CHECK: 3
+# CHECK: 2
 
 data Int  = Int2 (PrimInt PrimInt);
-binding k = \(x:Int y:Int) -> Void { printInt (x) };
-binding three = \() -> Int { Int2 (3 4) };
-binding main = \() -> Void { case three of
-                                Int2 (x y) ->  k (y x);
-                            };
+
+binding compose = \(f:F g:F x:X) -> F { 
+    let 
+        binding gx = \(g:F x:X) () -> F { g (x) };
+    in f (gx)
+};
+
+
+binding main = \() -> Void { printInt (2) };
