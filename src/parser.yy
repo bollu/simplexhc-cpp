@@ -93,6 +93,7 @@ void add_data_constructor_to_list(DataConstructor *b) {
 %token DATA
 %token LET
 %token IN
+%token DEFAULT
 
 %start toplevel
 %token <atom>	ATOMINT
@@ -112,6 +113,7 @@ void add_data_constructor_to_list(DataConstructor *b) {
 %type <alt> alt;
 %type <alt> altint;
 %type <alt> altvar;
+%type <alt> altdefault;
 %type <alt> altdestructure;
 
 %type <UNDEF> atomlist;
@@ -179,8 +181,6 @@ atomlist: OPENPAREN atoms_ CLOSEPAREN | OPENPAREN CLOSEPAREN
 altlist: altlist alt SEMICOLON { add_alt_to_list($2); }
          | alt SEMICOLON { add_alt_to_list($1); }
 
-alt: 
-   altint | altvar | altdestructure
 
 altint: 
       ATOMINT THINARROW expr { $$ = new stg::CaseAltInt(cast<AtomInt>($1), $3); }
@@ -188,6 +188,10 @@ altint:
 altvar:
       ATOMSTRING THINARROW expr { $$ = new stg::CaseAltVariable(cast<AtomIdent>($1)->getIdent(), $3); }
 
+altdefault: DEFAULT THINARROW expr { $$ = new stg::CaseAltDefault($3); }
+
+alt: 
+   altint | altvar | altdestructure | altdefault
 // Note that we need a mid rule action so that we reserve the atoms
 // consumed so far. Otherwise, expr will take all the atoms.
 // case * of (Int (x y) -> print (z))

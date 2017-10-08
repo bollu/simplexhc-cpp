@@ -109,8 +109,8 @@ class DataType {
             if (constructors[i] == needle) return i;
         }
 
-        assert(false &&
-               "unknown data constructor variant asked for data declaration");
+        report_fatal_error(
+            "unknown data constructor variant asked for data declaration");
     }
 };
 
@@ -135,7 +135,7 @@ class AtomInt : public Atom {
     int val;
 
    public:
-    AtomInt(int val) : val(val), Atom(Atom::AK_Int) {}
+    AtomInt(int val) : Atom(Atom::AK_Int), val(val) {}
     void print(std::ostream &os) const;
     static bool classof(const Atom *S) { return S->getKind() == Atom::AK_Int; }
     int getVal() const { return val; }
@@ -145,7 +145,7 @@ class AtomIdent : public Atom {
     Identifier ident;
 
    public:
-    AtomIdent(std::string ident) : ident(ident), Atom(Atom::AK_Ident) {}
+    AtomIdent(std::string ident) : Atom(Atom::AK_Ident), ident(ident) {}
     void print(std::ostream &os) const;
 
     Identifier getIdent() const { return ident; };
@@ -177,20 +177,24 @@ class Expression {
 class ExpressionAp : public Expression {
    public:
     using ParamsTy = SmallVector<Atom *, 2>;
-    using iterator = ParamsTy::iterator;
     using const_iterator = ParamsTy::const_iterator;
+    using const_reverse_iterator = ParamsTy::const_reverse_iterator;
 
-    iterator begin() { return args.begin(); }
-    iterator end() { return args.end(); }
+    const_iterator params_begin() const { return args.begin(); }
+    const_iterator params_end() const { return args.end(); }
 
-    const_iterator begin() const { return args.begin(); }
-    const_iterator end() const { return args.end(); }
+    iterator_range<const_iterator> params_range() const {
+        return make_range(params_begin(), params_end());
+    }
 
+    iterator_range<const_reverse_iterator> params_reverse_range() const {
+        return make_range(params_end(), params_begin());
+    }
     ExpressionAp(Identifier fn, std::initializer_list<Atom *> args)
-        : fn(fn), args(args), Expression(Expression::EK_Ap){};
+        : Expression(Expression::EK_Ap), fn(fn), args(args){};
 
     ExpressionAp(Identifier fn, ArrayRef<Atom *> argsref)
-        : fn(fn), Expression(Expression::EK_Ap) {
+        : Expression(Expression::EK_Ap), fn(fn) {
         for (Atom *arg : argsref) args.push_back(arg);
     };
     std::string getFnName() const { return fn; }
@@ -233,10 +237,10 @@ class ExpressionConstructor : public Expression {
 
     ExpressionConstructor(ConstructorName name,
                           std::initializer_list<Atom *> args)
-        : name(name), args(args), Expression(Expression::EK_Cons){};
+        : Expression(Expression::EK_Cons), name(name), args(args){};
 
     ExpressionConstructor(ConstructorName name, ArrayRef<Atom *> argsref)
-        : name(name), Expression(Expression::EK_Cons) {
+        : Expression(Expression::EK_Cons), name(name) {
         for (Atom *arg : argsref) args.push_back(arg);
     };
 
@@ -260,7 +264,7 @@ class ExpressionLet : public Expression {
 
    public:
     ExpressionLet(ArrayRef<Binding *> bindingsref, Expression *rhs)
-        : rhs(rhs), Expression(Expression::EK_Let) {
+        : Expression(Expression::EK_Let), rhs(rhs) {
         for (Binding *b : bindingsref) {
             bindings.push_back(b);
         }
@@ -286,7 +290,7 @@ class CaseAlt {
     friend std::ostream &operator<<(std::ostream &os, const CaseAlt &a);
     virtual void print(std::ostream &os) const = 0;
 
-    enum CaseAltKind { CAK_Int, CAK_Variable, CAK_Destructure };
+    enum CaseAltKind { CAK_Int, CAK_Variable, CAK_Destructure, CAK_Default };
     CaseAltKind getKind() const { return kind; }
 
    private:
@@ -354,6 +358,15 @@ class CaseAltDestructure : public CaseAlt {
     ConstructorName getConstructorName() const { return constructorName; }
 };
 
+class CaseAltDefault : public CaseAlt {
+   public:
+    CaseAltDefault(Expression *rhs) : CaseAlt(CAK_Default, rhs){};
+    void print(std::ostream &os) const;
+    static bool classof(const CaseAlt *a) {
+        return a->getKind() == CaseAlt::CAK_Default;
+    }
+};
+
 // *** Case *** //
 class ExpressionCase : public Expression {
    public:
@@ -365,7 +378,7 @@ class ExpressionCase : public Expression {
 
    public:
     ExpressionCase(Atom *scrutinee, ArrayRef<CaseAlt *> altsref)
-        : scrutinee(scrutinee), Expression(Expression::EK_Case) {
+        : Expression(Expression::EK_Case), scrutinee(scrutinee) {
         for (CaseAlt *alt : altsref) {
             alts.push_back(alt);
         }
@@ -410,6 +423,8 @@ class Lambda {
     using ParamList = SmallVector<Parameter *, 4>;
     using iterator = ParamList::iterator;
     using const_iterator = ParamList::const_iterator;
+    using reverse_iterator = ParamList::reverse_iterator;
+    using const_reverse_iterator = ParamList::const_reverse_iterator;
 
    private:
     ParamList boundparams;
@@ -454,6 +469,10 @@ class Lambda {
 
     iterator_range<const_iterator> free_params_range() const {
         return make_range(free_params_begin(), free_params_end());
+    }
+
+    iterator_range<const_reverse_iterator> free_params_reverse_range() const {
+        return make_range(free_params_end(), free_params_begin());
     }
 };
 

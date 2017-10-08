@@ -39,6 +39,7 @@ int compile_program(stg::Program *p, int argc, char **argv);
 "data"         return DATA;
 "let"         return LET;
 "in"         return IN;
+"default"         return DEFAULT;
 
 [ \t]          ;
 

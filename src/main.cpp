@@ -28,15 +28,15 @@ void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
                      BuildCtx &bctx);
 Function *materializeBinding(const Binding *b, Module &m, StgIRBuilder &builder,
                              BuildCtx &bctx);
+void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
+                       BuildCtx &bctx);
 // http://web.iitd.ac.in/~sumeet/flex__bison.pdf
 // http://aquamentus.com/flex_bison.html
-//
-//
 
 // Get a function with name `name`, and if it doesn't exist, create
 // a function with name `name`, type `FTy`, module `m`.
 static AssertingVH<Function> getOrCreateFunction(Module &m, FunctionType *FTy,
-                                     std::string name) {
+                                                 std::string name) {
     Function *F = m.getFunction(name);
     if (F) return F;
 
@@ -106,10 +106,10 @@ class Scope {
         }
     }
 
-
     void popScope() {
         assert(inner && "calling popScope on the innermost scope");
         if (inner.getValue()->isInnermostScope()) {
+            delete inner.getValue();
             inner = None;
         } else {
             inner.getValue()->popScope();
@@ -119,8 +119,7 @@ class Scope {
     bool isInnermostScope() const { return !inner; }
 
     ~Scope() {
-        if (inner)
-            delete inner.getPointer();
+        if (inner) delete inner.getValue();
     }
 };
 
@@ -141,6 +140,7 @@ class BuildCtx {
     AssertingVH<Function> pushReturnCont, popReturnCont;
     AssertingVH<GlobalVariable> stackInt;
     AssertingVH<GlobalVariable> stackIntTop;
+    AssertingVH<GlobalVariable> enteringFnAddr;
 
     // type of values in return stack: () -> ()
     Type *ReturnContTy;
@@ -175,8 +175,12 @@ class BuildCtx {
                  popReturnCont, stackReturnCont, stackReturnContTop);
 
         // *** Return */
-    }
 
+        // *** enteringFnAddr ***
+        enteringFnAddr = new GlobalVariable(m, builder.getInt64Ty(), /*isConstant=*/false,
+                GlobalValue::ExternalLinkage, ConstantInt::get(builder.getInt64Ty(), 0),
+                "enteringFnAddr");
+    }
 
     ~BuildCtx() {
         // delete this->stackReturnCont;
@@ -205,8 +209,8 @@ class BuildCtx {
         return It->second;
     }
 
-
-    AssertingVH<Value> getFunctionFromName(std::string name, StgIRBuilder &builder) const {
+    AssertingVH<Value> getFunctionFromName(std::string name,
+                                           StgIRBuilder &builder) const {
         auto It = identifiermap.find(name);
         if (It == identifiermap.end()) {
             cerr << "unknown function: " << name << "\n";
@@ -214,12 +218,16 @@ class BuildCtx {
         }
         Value *V = It->second;
         if (!isa<Function>(V)) {
-            Type *StgFunctionTy = FunctionType::get(builder.getVoidTy(), {}, false);
-            errs() << "Found value that is not function: " << *V << ". Transmuting...\n";
+            Type *StgFunctionTy =
+                FunctionType::get(builder.getVoidTy(), {}, false);
+            errs() << "Found value that is not function: " << *V
+                   << ". Transmuting...\n";
             if (isa<IntegerType>(V->getType())) {
-                V = builder.CreateIntToPtr(V, StgFunctionTy->getPointerTo(), V->getName() + "_transmute_to_fn");
+                V = builder.CreateIntToPtr(V, StgFunctionTy->getPointerTo(),
+                                           V->getName() + "_transmute_to_fn");
             }
-            V = builder.CreateBitOrPointerCast(V, StgFunctionTy->getPointerTo());
+            V = builder.CreateBitOrPointerCast(V,
+                                               StgFunctionTy->getPointerTo());
         }
         return V;
     }
@@ -255,11 +263,12 @@ class BuildCtx {
 
     // Class to create and destroy a scope with RAII.
     class Scoper {
-        public:
-            Scoper(BuildCtx &bctx) : bctx(bctx) { bctx.pushScope(); };
-            ~Scoper(){ bctx.popScope(); }
-        private:
-            BuildCtx &bctx;
+       public:
+        Scoper(BuildCtx &bctx) : bctx(bctx) { bctx.pushScope(); };
+        ~Scoper() { bctx.popScope(); }
+
+       private:
+        BuildCtx &bctx;
     };
 
    private:
@@ -285,8 +294,10 @@ class BuildCtx {
     }
 
     static void addStack(Module &m, StgIRBuilder &builder, Type *elemTy,
-                         std::string name, size_t size, AssertingVH<Function> &pushFn,
-                         AssertingVH<Function> &popFn, AssertingVH<GlobalVariable> &stack,
+                         std::string name, size_t size,
+                         AssertingVH<Function> &pushFn,
+                         AssertingVH<Function> &popFn,
+                         AssertingVH<GlobalVariable> &stack,
                          AssertingVH<GlobalVariable> &stackTop) {
         popFn = getOrCreateFunction(
             m, FunctionType::get(elemTy, /*isVarArg=*/false), "pop" + name);
@@ -374,22 +385,32 @@ Value *materializeAtom(const Atom *a, StgIRBuilder &builder, BuildCtx &bctx) {
     assert(false && "unreachable, switch case should have fired");
 }
 
+
+// materialize the code to enter into a closure.
+void materializeEnter(Value *Cont, Module &m, StgIRBuilder &builder,
+        BuildCtx &bctx) {
+    Value *FnAddr = builder.CreatePtrToInt(Cont, builder.getInt64Ty(), "entering_fn_addr");
+    builder.CreateStore(FnAddr, bctx.enteringFnAddr);
+    errs() << "Cont: " << *Cont << "\n";
+    CreateTailCall(builder, Cont, {});
+}
+
+// As always, the one who organises things (calls the function) does the work:
+// push params in reverse order.
 void materializeAp(const ExpressionAp *ap, Module &m, StgIRBuilder &builder,
                    BuildCtx &bctx) {
-    cerr << "materializing:"  << *ap << "\n";
-    for (Atom *p : *ap) {
+    for (Atom *p : ap->params_reverse_range()) {
         Value *v = materializeAtom(p, builder, bctx);
-        if (!isa<IntegerType>(v->getType())) {
-            errs() << "HACK: pushing non-int. Let's see how this goes.";
-            v = builder.CreatePtrToInt(v, builder.getInt64Ty());
-
-        };
+        if (!isa<AtomInt>(p)) {
+            v = builder.CreatePtrToInt(v, builder.getInt64Ty(), v->getName() + "_to_int");
+        }
+        errs() << __LINE__ << "\n";
+        errs() << "v: " << *v << "\n";
         builder.CreateCall(bctx.pushInt, {v});
+        errs() << __LINE__ << "\n";
     }
-    errs() << __PRETTY_FUNCTION__ <<  __LINE__ << "\n";
     Value *Cont = bctx.getFunctionFromName(ap->getFnName(), builder);
-    errs() << "Cont:"  << *Cont << "\n";
-    CreateTailCall(builder, Cont, {});
+    materializeEnter(Cont, m, builder, bctx);
 };
 
 void materializeConstructor(const ExpressionConstructor *c, Module &m,
@@ -397,7 +418,7 @@ void materializeConstructor(const ExpressionConstructor *c, Module &m,
     // TODO: refactor this to use DataLayout.
     int TotalSize = 8;  // for the tag.
     for (Atom *a : c->args_range()) {
-        AtomInt *ai = cast<AtomInt>(a);
+        cast<AtomInt>(a);
         TotalSize += 4;  // bytes.
     }
     DataConstructor *cons;
@@ -441,15 +462,14 @@ void materializeConstructor(const ExpressionConstructor *c, Module &m,
 // Assumes that the builder is focused on the correct basic block.
 void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
                                               const CaseAltDestructure *d,
-                                              Value *MemAddr,
-                                              Module &m, StgIRBuilder &builder,
+                                              Value *MemAddr, Module &m,
+                                              StgIRBuilder &builder,
                                               BuildCtx &bctx) {
     BuildCtx::Scoper scoper(bctx);
 
     // TODO: check that we have the correct destructured value
     // TODO: create Scope :P
     int i = 0;
-    DataType *decl;
     DataConstructor *cons;
 
     Type *T;
@@ -484,6 +504,7 @@ void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
 static const DataType *getCommonDataTypeFromAlts(const ExpressionCase *c,
                                                  const StgIRBuilder &builder,
                                                  const BuildCtx &bctx) {
+    errs() << __PRETTY_FUNCTION__ << "\n";
     const DataType *commondecl = nullptr;
     auto setCommonType = [&](const DataType *newdecl) -> void {
         if (commondecl == nullptr) {
@@ -524,7 +545,13 @@ Function *materializeCaseConstructorAlts(const ExpressionCase *c, Module &m,
     BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", f);
     builder.SetInsertPoint(entry);
 
-    const DataType *dataType = getCommonDataTypeFromAlts(c, builder, bctx);
+    // HACK: special case for case x of { default -> ... }
+    if (c->alts_size() == 1 && isa<CaseAltDefault>(*(c->alts_begin()))) {
+        const CaseAltDefault *default_ = cast<CaseAltDefault>(*c->alts_begin());
+        materializeExpr(default_->getRHS(), m, builder, bctx);
+        builder.CreateRetVoid();
+        return f;
+    }
 
     Value *MemAddr = builder.CreateCall(bctx.popInt, {}, "memaddr");
 
@@ -539,8 +566,8 @@ Function *materializeCaseConstructorAlts(const ExpressionCase *c, Module &m,
     builder.CreateUnreachable();
 
     builder.SetInsertPoint(entry);
-    SwitchInst *switch_ = builder.CreateSwitch(
-        Tag, failure, /*ncases=*/dataType->constructors_size());
+    SwitchInst *switch_ =
+        builder.CreateSwitch(Tag, failure, /*ncases=*/c->alts_size());
 
     for (CaseAlt *a : c->alts_range()) {
         switch (a->getKind()) {
@@ -550,12 +577,15 @@ Function *materializeCaseConstructorAlts(const ExpressionCase *c, Module &m,
                                                     d->getConstructorName(), f);
                 builder.SetInsertPoint(bb);
 
+                const DataType *dataType =
+                    getCommonDataTypeFromAlts(c, builder, bctx);
                 const int Tag = dataType->getIndexForConstructor(std::get<0>(
                     bctx.getDataConstructorFromName(d->getConstructorName())));
-                // teach the switch case to switch to this BB on encountering the tag.
+                // teach the switch case to switch to this BB on encountering
+                // the tag.
                 switch_->addCase(builder.getInt64(Tag), bb);
-                materializeCaseConstructorAltDestructure(c, d, MemAddr, m, builder,
-                                                         bctx);
+                materializeCaseConstructorAltDestructure(c, d, MemAddr, m,
+                                                         builder, bctx);
                 builder.CreateRetVoid();
                 break;
             }
@@ -563,8 +593,10 @@ Function *materializeCaseConstructorAlts(const ExpressionCase *c, Module &m,
                 assert(false && "case of a non-int scrutinee cannot have int");
                 break;
             case CaseAlt::CAK_Variable:
-                assert(false && "unimplemented");
+                assert(false && "unimplemented alt codegen for cak_variable");
                 break;
+            case CaseAlt::CAK_Default:
+                assert(false && "unimplemented alt codegen for cak_default");
         }
     }
     return f;
@@ -603,21 +635,71 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
     }
 }
 
+
+// *** LET CODEGEN
+// When someone calls a binding with free variables, the caller will push
+// free variables onto the stack first. So, we can pull the free vars
+// out from the stack.
+//
+//
+// As always, the one who initiates something must take burden: callee pushes
+// stuff onto the stack (for free variables) in the reverse order.
+// so, g = let f = \(a b c) (x y z) -> .. in alpha (f) 10 will become:
+//
+// g:
+//     push c
+//     push b
+//     push a
+//     push f <---
+//     node = <f's location on stack>
+//     enter alpha
+//
+//
+//
+// f:
+//   pop a
+//   pop b
+//   pop c
+//
+
+// Copied from materializeBinding - consider merging with.
+Function *materializeLetBinding(const Binding *b, Module &m, StgIRBuilder &builder,
+        BuildCtx &bctx) {
+    FunctionType *FTy =
+        FunctionType::get(builder.getVoidTy(), /*isVarArg=*/false);
+    Function *ClosureLanding =
+        Function::Create(FTy, GlobalValue::ExternalLinkage, b->getName(), &m);
+
+    BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", ClosureLanding);
+    builder.SetInsertPoint(entry);
+
+    // loop over the free parameters. These we would have in the scope
+    // of our let function, but we need to use the closure struct to get
+    // access to them.
+    BuildCtx::Scoper s(bctx);
+    for (const Parameter *p : b->getRhs()->free_params_range()) {
+        Value *v = builder.CreateCall(bctx.popInt, {}, "free_param_" + p->getName());
+        bctx.insertIdentifier(p->getName(), v);
+    }
+
+    materializeLambda(b->getRhs(), m, builder, bctx);
+    builder.CreateRetVoid();
+    return ClosureLanding;
+}
 void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
-                     BuildCtx &bctx) {
-
-
+                    BuildCtx &bctx) {
     BasicBlock *Entry = builder.GetInsertBlock();
     BuildCtx::Scoper scoper(bctx);
-    for(Binding *b : l->bindings_range())
-        bctx.insertBinding(b, materializeBinding(b, m, builder, bctx));
-
-    errs() << __LINE__ << "---module:\n" << m << __LINE__ << "---\n";
+    // For every binding, look through its free variables. Create a
+    // struct to hold these free variables and give it this struct / array
+    // whatever. It can re-synthesize its free variables from this struct (closure).
+    // When someone calls
+    for (Binding *b : l->bindings_range()) {
+        bctx.insertBinding(b, materializeLetBinding(b, m, builder, bctx));
+    }
 
     builder.SetInsertPoint(Entry);
     materializeExpr(l->getRHS(), m, builder, bctx);
-    errs() << __LINE__ << "---module:\n" << m << __LINE__ << "---\n";
-
 };
 
 void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
@@ -646,8 +728,9 @@ void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
         if (p->getType() == "PrimInt") {
             assert(false && "unhandled, functions taking prim ints as params");
         } else {
-            Value *pv = builder.CreateCall(bctx.popInt, {}, "param_" + p->getName());
-            bctx.insertIdentifier(p->getName(),  pv);
+            Value *pv =
+                builder.CreateCall(bctx.popInt, {}, "param_" + p->getName());
+            bctx.insertIdentifier(p->getName(), pv);
         }
     }
     materializeExpr(l->getRhs(), m, builder, bctx);
@@ -686,11 +769,11 @@ StructType *materializeDataConstructor(const DataType *decl,
 
 int compile_program(stg::Program *program, int argc, char **argv) {
     cout << "> program: " << *program << "\n";
-    LLVMContext ctx;
-    Module m("Module", ctx);
-    StgIRBuilder builder(ctx);
-    BuildCtx bctx(m, builder);
+    static LLVMContext ctx;
+    static StgIRBuilder builder(ctx);
 
+    Module *m = new Module("Module", ctx);
+    BuildCtx bctx(*m, builder);
     Binding *entrystg = nullptr;
     for (DataType *datatype : program->datatypes_range()) {
         assert(datatype->constructors_size() > 0);
@@ -698,7 +781,7 @@ int compile_program(stg::Program *program, int argc, char **argv) {
         for (DataConstructor *cons : datatype->constructors_range()) {
             bctx.insertDataConstructor(
                 cons->getName(), cons,
-                materializeDataConstructor(datatype, cons, m, builder, bctx));
+                materializeDataConstructor(datatype, cons, *m, builder, bctx));
         }
     }
 
@@ -708,16 +791,25 @@ int compile_program(stg::Program *program, int argc, char **argv) {
             entrystg = b;
         }
 
-        bctx.insertBinding(b, materializeBinding(b, m, builder, bctx));
+        bctx.insertBinding(b, materializeBinding(b, *m, builder, bctx));
     }
 
-    m.print(outs(), nullptr);
+    if (verifyModule(*m, nullptr) == 1) {
+        cerr << " *** Broken module found, aborting compilation.\nError:\n";
+        verifyModule(*m, &errs());
+        cerr << "-----\n";
+        cerr << "Module:\b";
+        errs() << *m << "\n";
+        return 1;
+    }
+
+    m->print(outs(), nullptr);
 
     if (argc != 1) {
         assert(argc == 2);
         std::error_code EC;
         llvm::raw_fd_ostream OS(argv[1], EC, llvm::sys::fs::F_None);
-        llvm::WriteBitcodeToFile(&m, OS);
+        llvm::WriteBitcodeToFile(m, OS);
     }
     return 0;
 }

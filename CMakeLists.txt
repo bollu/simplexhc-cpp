@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.4.3)
 project(simplexhc C CXX)
 
 # Colors when compiling with clang
-set(CMAKE_CXX_FLAGS "-fdiagnostics-color=always -fno-rtti -g")
+set(CMAKE_CXX_FLAGS "-fdiagnostics-color=always -fno-rtti -g -Wall")
 
 # LLVM
 find_package(LLVM REQUIRED)
@@ -12,8 +12,8 @@ llvm_map_components_to_libnames(LLVM_LIBS Core Support Bitwriter)
 find_package(BISON)
 find_package(FLEX)
 bison_target(Parser src/parser.yy ${CMAKE_SOURCE_DIR}/src/parser.generated.cpp)
-flex_target(Lexer src/lexer.l  ${CMAKE_SOURCE_DIR}/src/lexer.generated.cpp COMPILE_FLAGS -d)
-# flex_target(Lexer src/lexer.l  ${CMAKE_SOURCE_DIR}/src/lexer.generated.cpp)
+# flex_target(Lexer src/lexer.l  ${CMAKE_SOURCE_DIR}/src/lexer.generated.cpp COMPILE_FLAGS -d)
+flex_target(Lexer src/lexer.l  ${CMAKE_SOURCE_DIR}/src/lexer.generated.cpp)
 add_flex_bison_dependency(Lexer Parser)
 
 

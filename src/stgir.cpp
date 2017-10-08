@@ -145,6 +145,11 @@ void CaseAltDestructure::print(std::ostream &os) const {
     os  << " -> " << *rhs << "\n";
 }
 
+
+void CaseAltDefault::print(std::ostream &os) const {
+    os << "default" << "->" << *rhs << "\n";
+}
+
 // Binding
  std::ostream &stg::operator<<(std::ostream &os, const Binding &b) {
     os << "define " << b.lhs << " = " << *b.rhs;
