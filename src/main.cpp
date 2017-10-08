@@ -43,12 +43,30 @@ static AssertingVH<Function> getOrCreateFunction(Module &m, FunctionType *FTy,
     return Function::Create(FTy, GlobalValue::ExternalLinkage, name, &m);
 }
 
+static AssertingVH<Function> getOrCreateContFunc(Module &m,
+                                                 StgIRBuilder builder,
+                                                 std::string name) {
+    FunctionType *ContTy = FunctionType::get(builder.getVoidTy(), {}, false);
+    return getOrCreateFunction(m, ContTy, name);
+}
+
 static CallInst *CreateTailCall(StgIRBuilder &builder, Value *Fn,
                                 ArrayRef<Value *> Args,
                                 const Twine &Name = "") {
     CallInst *Call = builder.CreateCall(Fn, Args, Name);
     Call->setTailCallKind(CallInst::TCK_MustTail);
     return Call;
+}
+
+static Value *TransmuteToCont(Value *V, StgIRBuilder &builder) {
+    Type *ContTy = FunctionType::get(builder.getVoidTy(), {}, false);
+    return builder.CreateIntToPtr(V, ContTy->getPointerTo(),
+                                  V->getName() + "_transmute_to_fn");
+}
+
+static Value *TransmuteToInt(Value *V, StgIRBuilder &builder) {
+    return builder.CreatePtrToInt(V, builder.getInt64Ty(),
+                                  V->getName() + "_transmute_to_int");
 }
 
 template <typename K, typename V>
@@ -123,7 +141,8 @@ class Scope {
     }
 };
 
-static const int stackSize = 5000;
+static const int STACK_SIZE = 5000;
+static const int HEAP_SIZE = 5000;
 class BuildCtx {
    public:
     using IdentifierMapTy = Scope<Identifier, AssertingVH<Value>>;
@@ -138,8 +157,13 @@ class BuildCtx {
     AssertingVH<Function> printInt, popInt, pushInt;
     AssertingVH<Function> malloc;
     AssertingVH<Function> pushReturnCont, popReturnCont;
+    AssertingVH<Function> pushHeap, popHeap;
     AssertingVH<GlobalVariable> stackInt;
     AssertingVH<GlobalVariable> stackIntTop;
+
+    AssertingVH<GlobalVariable> heap;
+    AssertingVH<GlobalVariable> heapTop;
+
     AssertingVH<GlobalVariable> enteringFnAddr;
 
     // type of values in return stack: () -> ()
@@ -164,22 +188,27 @@ class BuildCtx {
                               {builder.getInt64Ty()}, false),
             "malloc");
         // *** Int ***
-        addStack(m, builder, builder.getInt64Ty(), "Int", stackSize, pushInt,
+        addStack(m, builder, builder.getInt64Ty(), "Int", STACK_SIZE, pushInt,
                  popInt, stackInt, stackIntTop);
 
         // type of returns.
         ReturnContTy =
             FunctionType::get(builder.getVoidTy(), {}, /*isVarArg=*/false)
                 ->getPointerTo();
-        addStack(m, builder, ReturnContTy, "Return", stackSize, pushReturnCont,
+        addStack(m, builder, ReturnContTy, "Return", STACK_SIZE, pushReturnCont,
                  popReturnCont, stackReturnCont, stackReturnContTop);
+
+        // *** Heap ***
+        addStack(m, builder, builder.getInt64Ty(), "Heap", HEAP_SIZE, pushHeap,
+                 popHeap, heap, heapTop);
 
         // *** Return */
 
         // *** enteringFnAddr ***
-        enteringFnAddr = new GlobalVariable(m, builder.getInt64Ty(), /*isConstant=*/false,
-                GlobalValue::ExternalLinkage, ConstantInt::get(builder.getInt64Ty(), 0),
-                "enteringFnAddr");
+        enteringFnAddr = new GlobalVariable(
+            m, builder.getInt64Ty(), /*isConstant=*/false,
+            GlobalValue::ExternalLinkage,
+            ConstantInt::get(builder.getInt64Ty(), 0), "enteringFnAddr");
     }
 
     ~BuildCtx() {
@@ -385,11 +414,11 @@ Value *materializeAtom(const Atom *a, StgIRBuilder &builder, BuildCtx &bctx) {
     assert(false && "unreachable, switch case should have fired");
 }
 
-
 // materialize the code to enter into a closure.
 void materializeEnter(Value *Cont, Module &m, StgIRBuilder &builder,
-        BuildCtx &bctx) {
-    Value *FnAddr = builder.CreatePtrToInt(Cont, builder.getInt64Ty(), "entering_fn_addr");
+                      BuildCtx &bctx) {
+    Value *FnAddr =
+        builder.CreatePtrToInt(Cont, builder.getInt64Ty(), "entering_fn_addr");
     builder.CreateStore(FnAddr, bctx.enteringFnAddr);
     errs() << "Cont: " << *Cont << "\n";
     CreateTailCall(builder, Cont, {});
@@ -402,7 +431,8 @@ void materializeAp(const ExpressionAp *ap, Module &m, StgIRBuilder &builder,
     for (Atom *p : ap->params_reverse_range()) {
         Value *v = materializeAtom(p, builder, bctx);
         if (!isa<AtomInt>(p)) {
-            v = builder.CreatePtrToInt(v, builder.getInt64Ty(), v->getName() + "_to_int");
+            v = builder.CreatePtrToInt(v, builder.getInt64Ty(),
+                                       v->getName() + "_to_int");
         }
         errs() << __LINE__ << "\n";
         errs() << "v: " << *v << "\n";
@@ -635,7 +665,6 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
     }
 }
 
-
 // *** LET CODEGEN
 // When someone calls a binding with free variables, the caller will push
 // free variables onto the stack first. So, we can pull the free vars
@@ -663,42 +692,77 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
 //
 
 // Copied from materializeBinding - consider merging with.
-Function *materializeLetBinding(const Binding *b, Module &m, StgIRBuilder &builder,
-        BuildCtx &bctx) {
-    FunctionType *FTy =
-        FunctionType::get(builder.getVoidTy(), /*isVarArg=*/false);
-    Function *ClosureLanding =
-        Function::Create(FTy, GlobalValue::ExternalLinkage, b->getName(), &m);
-
-    BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", ClosureLanding);
+void materializeLetBinding(Function *F, const Binding *b, Module &m,
+                           StgIRBuilder &builder, BuildCtx &bctx) {
+    BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
     builder.SetInsertPoint(entry);
 
     // loop over the free parameters. These we would have in the scope
     // of our let function, but we need to use the closure struct to get
     // access to them.
     BuildCtx::Scoper s(bctx);
+    int i = 0;
+
     for (const Parameter *p : b->getRhs()->free_params_range()) {
-        Value *v = builder.CreateCall(bctx.popInt, {}, "free_param_" + p->getName());
+        // HACK,WRONG: it should index the heap
+        Value *Idx =
+            builder.CreateGEP(bctx.enteringFnAddr, {builder.getInt64(i + 1)},
+                              "heap_" + p->getName() + "_idx");
+        Value *v = builder.CreateLoad(Idx);
         bctx.insertIdentifier(p->getName(), v);
+        i++;
     }
 
     materializeLambda(b->getRhs(), m, builder, bctx);
     builder.CreateRetVoid();
-    return ClosureLanding;
 }
 void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
                     BuildCtx &bctx) {
     BasicBlock *Entry = builder.GetInsertBlock();
+
+
+    // Open a new scope.---
     BuildCtx::Scoper scoper(bctx);
-    // For every binding, look through its free variables. Create a
-    // struct to hold these free variables and give it this struct / array
-    // whatever. It can re-synthesize its free variables from this struct (closure).
-    // When someone calls
+    // 1. Create stubs for all bindings.
+    std::map<Binding *, Function *> bindingToEntryFunc;
     for (Binding *b : l->bindings_range()) {
-        bctx.insertBinding(b, materializeLetBinding(b, m, builder, bctx));
+        Function *bf =  getOrCreateContFunc(m, builder, b->getName());
+        bindingToEntryFunc[b] = bf;
+        bctx.insertIdentifier(b->getName(), bf);
     }
 
+
+    // 2. Fill in stubs
+    for (auto It : bindingToEntryFunc) {
+        Function *bf = It.second;
+        const Binding *b = It.first;
+        materializeLetBinding(bf, b, m, builder, bctx);
+    }
+
+    //3. Create Heap closures for all stub bindings, create a scope
+    //for the RHS to use.
     builder.SetInsertPoint(Entry);
+    for (auto It : bindingToEntryFunc) {
+        Function *bf = It.second;
+        const Binding *b = It.first;
+        Value *HeapTop = builder.CreateLoad(
+            bctx.heapTop, "heap_top_" + b->getName() + "_loc");
+        HeapTop = TransmuteToCont(HeapTop, builder);
+
+        Value *bfTransmuted = TransmuteToInt(bf, builder);
+        builder.CreateCall(bctx.pushHeap, {bfTransmuted});
+
+        // push heap values
+        for (const Parameter *p : b->getRhs()->free_params_range()) {
+            Value *v = bctx.getIdentifier(p->getName());
+            builder.CreateCall(bctx.pushHeap, {v});
+        }
+    }
+
+    // Now create heap locations for these bad boys and
+    // set those heap locations to be the "correct"
+    // locations.
+
     materializeExpr(l->getRHS(), m, builder, bctx);
 };
 
@@ -795,11 +859,12 @@ int compile_program(stg::Program *program, int argc, char **argv) {
     }
 
     if (verifyModule(*m, nullptr) == 1) {
-        cerr << " *** Broken module found, aborting compilation.\nError:\n";
-        verifyModule(*m, &errs());
         cerr << "-----\n";
         cerr << "Module:\b";
         errs() << *m << "\n";
+        cerr << "-----\n";
+        cerr << " *** Broken module found, aborting compilation.\nError:\n";
+        verifyModule(*m, &errs());
         return 1;
     }
 

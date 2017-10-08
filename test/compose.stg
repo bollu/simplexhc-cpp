@@ -3,6 +3,11 @@
 
 data Int  = Int2 (PrimInt PrimInt);
 
+binding twothree = \() -> Int2 { Int2 (2 3) };
+
+binding extract = \(x:Int) -> PrimInt { case x of
+    Int2 (x y) -> x (); };
+
 binding compose = \(f:F g:F x:X) -> F { 
     let 
         binding gx = \(g:F x:X) () -> F { g (x) };
@@ -10,4 +15,4 @@ binding compose = \(f:F g:F x:X) -> F {
 };
 
 
-binding main = \() -> Void { printInt (2) };
+binding main = \() -> Void { compose (printInt extract twothree) };

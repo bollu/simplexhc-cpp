@@ -1,5 +1,5 @@
 # RUN: ./compile-and-run-program.sh %s | FileCheck %s
-# CHECK: 3
+# CHECK: 4
 
 data Int  = Int2 (PrimInt PrimInt);
 
