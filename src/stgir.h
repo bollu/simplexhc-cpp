@@ -466,6 +466,7 @@ class Lambda {
 
     const_iterator free_params_begin() const { return freeparams.begin(); }
     const_iterator free_params_end() const { return freeparams.end(); }
+    unsigned free_params_size() const { return freeparams.size(); }
 
     iterator_range<const_iterator> free_params_range() const {
         return make_range(free_params_begin(), free_params_end());

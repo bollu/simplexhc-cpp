@@ -1,0 +1,4 @@
+# RUN: ./compile-and-run-program.sh %s | FileCheck %s
+# CHECK: 42
+
+binding main = \() -> Void {  printInt (42) };

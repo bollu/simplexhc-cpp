@@ -34,8 +34,11 @@ void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
                      BuildCtx &bctx);
 
 struct LLVMBindingData {
-    Function *fn;
-    GlobalValue *closure;
+    AssertingVH<Function> fn;
+    AssertingVH<GlobalVariable> closure;
+
+    LLVMBindingData(Function *fn, GlobalVariable *closure)
+        : fn(fn), closure(closure){};
 };
 LLVMBindingData materializeBinding(const Binding *b, Module &m,
                                    StgIRBuilder &builder, BuildCtx &bctx);
@@ -172,6 +175,8 @@ class BuildCtx {
    public:
     using IdentifierMapTy = Scope<Identifier, AssertingVH<Value>>;
 
+    using BindingMapTy = std::map<Identifier, LLVMBindingData>;
+
     // a map from data constructors to the underlying DataConstructor
     using DataConstructorMap =
         std::map<ConstructorName, std::tuple<DataConstructor *, Type *>>;
@@ -195,9 +200,9 @@ class BuildCtx {
 
     AssertingVH<GlobalVariable> enteringFnAddr;
 
-    static const unsigned MaxFreeParams = 10;
+    static const unsigned MAX_FREE_PARAMS = 10;
     // type of closure { i64 tag, () -> () fn, <free vars> }
-    StructType *ClosureTy[MaxFreeParams];
+    StructType *ClosureTy[MAX_FREE_PARAMS];
     // type of values in return stack: () -> ()
     Type *ContTy;
     // stack of return values, in reality a large array
@@ -238,16 +243,15 @@ class BuildCtx {
             GlobalValue::ExternalLinkage,
             ConstantInt::get(builder.getInt64Ty(), 0), "enteringFnAddr");
 
-
         // ContTy
         ContTy = FunctionType::get(builder.getVoidTy(), {}, false);
 
         // ClosureTy
         std::vector<Type *> StructMemberTys;
 
-        StructMemberTys = {builder.getInt64Ty(), ContTy};
+        StructMemberTys = {builder.getInt64Ty(), ContTy->getPointerTo()};
         ClosureTy[0] = StructType::create(StructMemberTys, "Closure_Free0");
-        for (unsigned i = 1; i < MaxFreeParams; i++) {
+        for (unsigned i = 1; i < MAX_FREE_PARAMS; i++) {
             StructMemberTys = {builder.getInt64Ty(), ContTy,
                                ArrayType::get(getVoidPointerTy(builder), i)};
             ClosureTy[i] = StructType::create(
@@ -264,8 +268,9 @@ class BuildCtx {
 
     // map a binding to a function in the given scope.
     void insertBinding(Binding *b, LLVMBindingData bdata) {
-        assert(false);
-        // identifiermap.insert(b->getName(), f);
+        assert(bindingmap.find(b->getName()) == bindingmap.end());
+        // assert(false);
+        bindingmap.insert(std::make_pair(b->getName(), bdata));
     }
 
     // map an identifier to a value in the current scope.
@@ -358,6 +363,7 @@ class BuildCtx {
     void popScope() { identifiermap.popScope(); }
 
     IdentifierMapTy identifiermap;
+    BindingMapTy bindingmap;
     DataConstructorMap dataConstructorMap;
     DataTypeMap dataTypeMap;
 
@@ -861,10 +867,31 @@ LLVMBindingData materializeBinding(const Binding *b, Module &m,
     materializeLambda(b->getRhs(), m, builder, bctx);
     builder.CreateRetVoid();
 
-    LLVMBindingData data;
-    GlobalVariable *bindingCls = nullptr;
-    assert(false);
-    return data;
+    int nFreeVars = b->getRhs()->free_params_size();
+    assert(nFreeVars <= bctx.MAX_FREE_PARAMS);
+    StructType *closureTy = bctx.ClosureTy[nFreeVars];
+
+    // 2. Create the initializer for the closure
+    Constant *initializer = [&] { 
+        std::vector<Constant *> initializer_list;
+        // tag.
+        initializer_list.push_back(ConstantInt::get(
+                    builder.getInt64Ty(), (unsigned)ClosureTag::FreeBegin + nFreeVars));
+        // function (to jump into)
+        initializer_list.push_back(F);
+        // free vars
+
+        assert(nFreeVars == 0 && "free variables not supported yet.");
+        return ConstantStruct::get(closureTy, initializer_list);
+    }();
+
+    errs() << "initializer: " << *initializer << "\n";
+
+
+    GlobalVariable *closure = new GlobalVariable(
+        m, closureTy, /*isconstant=*/true, GlobalValue::ExternalLinkage,
+        initializer, b->getName() + "_closure");
+    return LLVMBindingData(F, closure);
 }
 
 // construct a StructType for a DataConstructor
