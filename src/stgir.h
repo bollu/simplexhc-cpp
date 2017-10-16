@@ -472,6 +472,8 @@ class Lambda {
         return make_range(free_params_begin(), free_params_end());
     }
 
+    ArrayRef<const Parameter *>free_params_ref() const { return freeparams; }
+
     iterator_range<const_reverse_iterator> free_params_reverse_range() const {
         return make_range(free_params_end(), free_params_begin());
     }

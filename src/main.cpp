@@ -45,7 +45,7 @@ LLVMClosureData materializeBinding(const Binding *b, Module &m,
 void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
                        BuildCtx &bctx);
 
-LLVMClosureData materializeClosureForFn(Function *F, unsigned nFreeVars,
+LLVMClosureData materializeStaticClosureForFn(Function *F,
                                         std::string name, Module &m,
                                         StgIRBuilder &builder, BuildCtx &bctx);
 
@@ -206,6 +206,7 @@ class BuildCtx {
     AssertingVH<GlobalVariable> heapTop;
 
     AssertingVH<GlobalVariable> enteringFnAddr;
+    AssertingVH<Function> enterDynamicClosure;
 
     static const unsigned MAX_FREE_PARAMS = 10;
     // type of closure { i64 tag, () -> () fn, <free vars> }
@@ -266,10 +267,13 @@ class BuildCtx {
             Function *F = getOrCreateFunction(
                 m, FunctionType::get(builder.getVoidTy(),
                                      /*isVarArg=*/false), "printInt");
-            return new LLVMClosureData(materializeClosureForFn(
-                F, /*numfreevars*/ 0, "closure_printInt", m, builder, *this));
+            return new LLVMClosureData(materializeStaticClosureForFn(
+                F, "closure_printInt", m, builder, *this));
         }();
-        this->bindingmap.insert(std::make_pair("printInt", *printInt));
+        this->staticBindingMap.insert(std::make_pair("printInt", *printInt));
+
+        // *** enter dynamic closure ***
+        enterDynamicClosure = addEnterDynamicClosureToModule(m, builder);
     }
 
     ~BuildCtx() {
@@ -282,9 +286,9 @@ class BuildCtx {
 
     // map a binding to a function in the given scope.
     void insertBinding(Binding *b, LLVMClosureData bdata) {
-        assert(bindingmap.find(b->getName()) == bindingmap.end());
+        assert(staticBindingMap.find(b->getName()) == staticBindingMap.end());
         // assert(false);
-        bindingmap.insert(std::make_pair(b->getName(), bdata));
+        staticBindingMap.insert(std::make_pair(b->getName(), bdata));
     }
 
     // map an identifier to a value in the current scope.
@@ -306,39 +310,14 @@ class BuildCtx {
         return It->second;
     }
 
-    LLVMClosureData getClosureDataFromName(std::string name,
+    Optional<LLVMClosureData> getStaticClosureDataFromName(std::string name,
                                            StgIRBuilder &builder) const {
-        auto It = bindingmap.find(name);
-        if (It == bindingmap.end()) {
+        auto It = staticBindingMap.find(name);
+        if (It == staticBindingMap.end()) {
             cerr << "unknown closure: " << name << "\n";
             assert(false && "unknown closure");
         }
         return It->second;
-
-        // 2. search in identifiermap
-        // {
-        //     auto It = identifiermap.find(name);
-        //     if (It == identifiermap.end()) {
-        //         cerr << "unknown function: " << name << "\n";
-        //     }
-        //     V = It->second;
-        // };
-
-        //     assert(V != nullptr && "function not found");
-        // if (!isa<Function>(V)) {
-        //     Type *StgFunctionTy =
-        //         FunctionType::get(builder.getVoidTy(), {}, false);
-        //     errs() << "Found value that is not function: " << *V
-        //            << ". Transmuting...\n";
-        //     if (isa<IntegerType>(V->getType())) {
-        //         V = builder.CreateIntToPtr(V, StgFunctionTy->getPointerTo(),
-        //                                    V->getName() +
-        //                                    "_transmute_to_fn");
-        //     }
-        //     V = builder.CreateBitOrPointerCast(V,
-        //                                        StgFunctionTy->getPointerTo());
-        // }
-        // return V;
     }
 
     // TODO: this cannot be structType because we can have things like
@@ -389,7 +368,7 @@ class BuildCtx {
     void popScope() { identifiermap.popScope(); }
 
     IdentifierMapTy identifiermap;
-    BindingMapTy bindingmap;
+    BindingMapTy staticBindingMap;
     DataConstructorMap dataConstructorMap;
     DataTypeMap dataTypeMap;
 
@@ -472,6 +451,15 @@ class BuildCtx {
         builder.CreateStore(idx, stackTop);
         builder.CreateRet(Ret);
     }
+
+    static Function *addEnterDynamicClosureToModule(Module &m, StgIRBuilder builder) {
+        Function *F = getOrCreateFunction(m, FunctionType::get(builder.getVoidTy(), {}, /*varargs*/ false),
+        "enter_dynamic_closure");
+        BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
+        builder.SetInsertPoint(entry);
+        builder.CreateRetVoid();
+        return F;
+    }
 };
 
 Value *materializeAtomInt(const AtomInt *i, StgIRBuilder &builder,
@@ -496,7 +484,7 @@ Value *materializeAtom(const Atom *a, StgIRBuilder &builder, BuildCtx &bctx) {
 }
 
 // materialize the code to enter into a closure.
-void materializeEnter(LLVMClosureData Cls, Module &m, StgIRBuilder &builder,
+void materializeEnterStaticClosure(LLVMClosureData Cls, Module &m, StgIRBuilder &builder,
                       BuildCtx &bctx) {
     // for now, assume that our functions have no free vars.
     Value *F = Cls.fn;
@@ -505,6 +493,12 @@ void materializeEnter(LLVMClosureData Cls, Module &m, StgIRBuilder &builder,
     builder.CreateStore(FnAddr, bctx.enteringFnAddr);
     CreateTailCall(builder, F, {});
 }
+
+void materializeEnterDynamicClosure(Value *V, Module &m, StgIRBuilder &builder, BuildCtx &bctx) {
+    // we need to lookup the free vars dynamically and push it onto the stack.
+    CreateTailCall(builder, bctx.enterDynamicClosure, {V});
+        assert(false && "entering dynamic closure");
+};
 
 // As always, the one who organises things (calls the function) does the work:
 // push params in reverse order.
@@ -521,8 +515,13 @@ void materializeAp(const ExpressionAp *ap, Module &m, StgIRBuilder &builder,
         builder.CreateCall(bctx.pushInt, {v});
         errs() << __LINE__ << "\n";
     }
-    LLVMClosureData Cls = bctx.getClosureDataFromName(ap->getFnName(), builder);
-    materializeEnter(Cls, m, builder, bctx);
+    Optional<LLVMClosureData> Cls = bctx.getStaticClosureDataFromName(ap->getFnName(), builder);
+    if (Cls) {
+        materializeEnterStaticClosure(*Cls, m, builder, bctx);
+    } else {
+         Value *V = bctx.getIdentifier(ap->getFnName());
+         materializeEnterDynamicClosure(V, m, builder, bctx);
+    }
 };
 
 void materializeConstructor(const ExpressionConstructor *c, Module &m,
@@ -727,13 +726,14 @@ void materializeCaseConstructor(const ExpressionCase *c, Module &m,
 
     const Identifier scrutinee = cast<AtomIdent>(c->getScrutinee())->getIdent();
     // TODO: come up with a notion of scope.
-    LLVMClosureData NextCls = bctx.getClosureDataFromName(scrutinee, builder);
+    // In the case of constructor, the static closure entry _must_ exist.
+    Optional<LLVMClosureData> NextCls = bctx.getStaticClosureDataFromName(scrutinee, builder);
     // push a return continuation for the function `Next` to follow.
     Function *AltHandler = materializeCaseConstructorAlts(c, m, builder, bctx);
 
     builder.SetInsertPoint(BB);
     builder.CreateCall(bctx.pushReturnCont, {AltHandler});
-    materializeEnter(NextCls, m, builder, bctx);
+    materializeEnterStaticClosure(*NextCls, m, builder, bctx);
     // CreateTailCall(builder, Next, {});
 }
 
@@ -883,23 +883,21 @@ void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
     materializeExpr(l->getRhs(), m, builder, bctx);
 }
 
-LLVMClosureData materializeClosureForFn(Function *F, unsigned nFreeVars,
+LLVMClosureData materializeStaticClosureForFn(Function *F,
                                         std::string name, Module &m,
                                         StgIRBuilder &builder, BuildCtx &bctx) {
-    assert(nFreeVars <= bctx.MAX_FREE_PARAMS);
-    StructType *closureTy = bctx.ClosureTy[nFreeVars];
+    StructType *closureTy = bctx.ClosureTy[0];
 
     // 2. Create the initializer for the closure
     Constant *initializer = [&] {
         std::vector<Constant *> initializer_list;
         // tag.
         initializer_list.push_back(ConstantInt::get(
-            builder.getInt64Ty(), (unsigned)ClosureTag::FreeBegin + nFreeVars));
+            builder.getInt64Ty(), (unsigned)ClosureTag::FreeBegin));
         // function (to jump into)
         initializer_list.push_back(F);
-        // free vars
 
-        assert(nFreeVars == 0 && "free variables not supported yet.");
+        // assert(nFreeVars == 0 && "free variables not supported yet.");
         return ConstantStruct::get(closureTy, initializer_list);
     }();
 
@@ -923,8 +921,7 @@ LLVMClosureData materializeBinding(const Binding *b, Module &m,
     materializeLambda(b->getRhs(), m, builder, bctx);
     builder.CreateRetVoid();
 
-    const int nFreeVars = b->getRhs()->free_params_size();
-    return materializeClosureForFn(F, nFreeVars, b->getName() + "_closure", m,
+    return materializeStaticClosureForFn(F, b->getName() + "_closure", m,
                                    builder, bctx);
 }
 
