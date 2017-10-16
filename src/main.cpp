@@ -40,7 +40,7 @@ struct LLVMClosureData {
     LLVMClosureData(Function *fn, GlobalVariable *closure)
         : fn(fn), closure(closure){};
 };
-LLVMClosureData materializeBinding(const Binding *b, Module &m,
+LLVMClosureData materializeTopLevelStaticBinding(const Binding *b, Module &m,
                                    StgIRBuilder &builder, BuildCtx &bctx);
 void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
                        BuildCtx &bctx);
@@ -796,7 +796,7 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
 //   pop c
 //
 
-// Copied from materializeBinding - consider merging with.
+// Copied from materializeTopLevelStaticBinding - consider merging with.
 Value *_allocateLetBindingDynamicClosure(const Binding *b, BasicBlock *BB,
                                          Module &m, StgIRBuilder builder,
                                          BuildCtx &bctx) {
@@ -810,7 +810,7 @@ Value *_allocateLetBindingDynamicClosure(const Binding *b, BasicBlock *BB,
     Value *rawMem = builder.CreateCall(
         bctx.malloc, {builder.getInt64(sizeInBytes)}, "rawmem");
     Value *typedMem =
-        builder.CreateBitCast(rawMem, closureTy->getPointerTo(), "closure");
+        builder.CreateBitCast(rawMem, closureTy->getPointerTo(), "closure_" + b->getName());
 
     Value *tagSlot = builder.CreateGEP(
         typedMem, {builder.getInt64(0), builder.getInt32(0)}, "tag_slot");
@@ -821,6 +821,25 @@ Value *_allocateLetBindingDynamicClosure(const Binding *b, BasicBlock *BB,
     // no store to function slot, args. These come later.
     return typedMem;
 }
+
+// Materialize the function that gets executed when a let-binding is evaluated.
+// NOTE: this is exactly the same thing as materializeTopLevelStaticBinding, except
+// that it also creates a static closure.
+// Consider mergining with materializeTopLevelStaticBinding
+Function *_materializeDynamicLetBinding(const Binding *b, Module &m, StgIRBuilder builder,
+        BuildCtx &bctx) {
+    FunctionType *FTy =
+        FunctionType::get(builder.getVoidTy(), /*isVarArg=*/false);
+    Function *F =
+        Function::Create(FTy, GlobalValue::ExternalLinkage, b->getName(), &m);
+
+    BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
+    builder.SetInsertPoint(entry);
+    materializeLambda(b->getRhs(), m, builder, bctx);
+    builder.CreateRetVoid();
+    return F;
+}
+
 void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
                     BuildCtx &bctx) {
     BasicBlock *Entry = builder.GetInsertBlock();
@@ -829,12 +848,25 @@ void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
     BuildCtx::Scoper scoper(bctx);
 
     // allocate memory slots for each binding.
+    // We do this first so that mutually recursive let bindings will now
+    // have pointers to each others closures when we start codegen
     for (Binding *b : l->bindings_range()) {
         Value *cls =
             _allocateLetBindingDynamicClosure(b, Entry, m, builder, bctx);
         bctx.insertIdentifier(b->getName(), cls);
     }
-    errs() << *Entry << "\n";
+
+
+    for(Binding *b : l->bindings_range()) {
+        Function *f = _materializeDynamicLetBinding(b, m, builder, bctx);
+        Value *cls = bctx.getIdentifier(b->getName());
+        // store this in the closure slot.
+        Value *fnSlot = builder.CreateGEP(cls, {builder.getInt64(0), builder.getInt32(1)}, "fn_slot");
+        builder.CreateStore(f, fnSlot);
+
+        for(Parameter *p : b->getRhs()->free_params_range())
+            assert(false && "free parameters unimplemented.");
+    }
 
     // TODO: codegen each binding. Fuck that for now.
 
@@ -904,7 +936,7 @@ LLVMClosureData materializeStaticClosureForFn(Function *F, std::string name,
     return LLVMClosureData(F, closure);
 }
 
-LLVMClosureData materializeBinding(const Binding *b, Module &m,
+LLVMClosureData materializeTopLevelStaticBinding(const Binding *b, Module &m,
                                    StgIRBuilder &builder, BuildCtx &bctx) {
     FunctionType *FTy =
         FunctionType::get(builder.getVoidTy(), /*isVarArg=*/false);
@@ -963,7 +995,7 @@ int compile_program(stg::Program *program, int argc, char **argv) {
             entrystg = b;
         }
 
-        bctx.insertBinding(b, materializeBinding(b, *m, builder, bctx));
+        bctx.insertBinding(b, materializeTopLevelStaticBinding(b, *m, builder, bctx));
     }
 
     if (verifyModule(*m, nullptr) == 1) {
