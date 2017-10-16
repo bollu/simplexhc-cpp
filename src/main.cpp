@@ -41,7 +41,8 @@ struct LLVMClosureData {
         : fn(fn), closure(closure){};
 };
 LLVMClosureData materializeTopLevelStaticBinding(const Binding *b, Module &m,
-                                   StgIRBuilder &builder, BuildCtx &bctx);
+                                                 StgIRBuilder &builder,
+                                                 BuildCtx &bctx);
 void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
                        BuildCtx &bctx);
 
@@ -62,12 +63,14 @@ static AssertingVH<Function> getOrCreateFunction(Module &m, FunctionType *FTy,
     return Function::Create(FTy, GlobalValue::ExternalLinkage, name, &m);
 }
 
+/*
 static AssertingVH<Function> getOrCreateContFunc(Module &m,
                                                  StgIRBuilder builder,
                                                  std::string name) {
     FunctionType *ContTy = FunctionType::get(builder.getVoidTy(), {}, false);
     return getOrCreateFunction(m, ContTy, name);
 }
+*/
 
 static CallInst *CreateTailCall(StgIRBuilder &builder, Value *Fn,
                                 ArrayRef<Value *> Args,
@@ -77,11 +80,13 @@ static CallInst *CreateTailCall(StgIRBuilder &builder, Value *Fn,
     return Call;
 }
 
+/*
 static Value *TransmuteToCont(Value *V, StgIRBuilder &builder) {
     Type *ContTy = FunctionType::get(builder.getVoidTy(), {}, false);
     return builder.CreateIntToPtr(V, ContTy->getPointerTo(),
                                   V->getName() + "_transmute_to_fn");
 }
+*/
 
 static Value *TransmuteToInt(Value *V, StgIRBuilder &builder) {
     if (V->getType()->isIntegerTy()) return V;
@@ -254,7 +259,7 @@ class BuildCtx {
         StructMemberTys = {builder.getInt64Ty(), ContTy->getPointerTo()};
         ClosureTy[0] = StructType::create(StructMemberTys, "Closure_Free0");
         for (unsigned i = 1; i < MAX_FREE_PARAMS; i++) {
-            StructMemberTys = {builder.getInt64Ty(), ContTy,
+            StructMemberTys = {builder.getInt64Ty(), ContTy->getPointerTo(),
                                ArrayType::get(getRawMemTy(builder), i)};
             ClosureTy[i] = StructType::create(
                 StructMemberTys, "Closure_Free" + std::to_string(i));
@@ -462,8 +467,63 @@ class BuildCtx {
             FunctionType::get(builder.getVoidTy(), {builder.getInt64Ty()},
                               /*varargs = */ false),
             "enter_dynamic_closure");
+
         BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
         builder.SetInsertPoint(entry);
+        Argument *argInt = &*F->arg_begin();
+        argInt->setName("f_as_int");
+
+        Value *argRawMem = builder.CreateIntToPtr(argInt, getRawMemTy(builder), "f_as_raw_mem");
+        Value *typedClosure =
+            builder.CreateBitCast(argRawMem, bctx.ClosureTy[bctx.MAX_FREE_PARAMS - 1]->getPointerTo(), "f_as_closure");
+
+        Value *tagSlot = builder.CreateGEP(typedClosure, {builder.getInt64(0), builder.getInt32(0)}, "tag_slot");
+        Value *tag = builder.CreateLoad(tagSlot, "tag");
+        Value *nFreeVars = builder.CreateSub(
+            tag, builder.getInt64((unsigned)ClosureTag::FreeBegin),
+            "nFreeVars");
+        // typecast it to the "largest" possible, because at max, we will index
+        // it till the max.
+
+        BasicBlock *free_push_loop_preheader =
+            BasicBlock::Create(m.getContext(), "free_push_loop_preheader", F);
+        BasicBlock *free_push_loop_body =
+            BasicBlock::Create(m.getContext(), "free_push_loop_body", F);
+        BasicBlock *free_push_loop_exit =
+            BasicBlock::Create(m.getContext(), "free_push_loop_exit", F);
+
+        // entry---
+        builder.SetInsertPoint(entry);
+        builder.CreateBr(free_push_loop_preheader);
+
+        // preheader---"
+        builder.SetInsertPoint(free_push_loop_preheader);
+        PHINode *i = builder.CreatePHI(builder.getInt64Ty(), 2, "i");
+        builder.CreateBr(free_push_loop_body);
+
+        // body----
+        builder.SetInsertPoint(free_push_loop_body);
+        Value *iNext = builder.CreateAdd(i, builder.getInt64(1), "i.next");
+        Value *shouldLoop =
+            builder.CreateICmpULE(iNext, nFreeVars, "should_loop");
+        // TODO: fill up loop with something useful
+        Function *trap = getOrCreateFunction(
+            m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
+        builder.CreateCall(trap, {});
+        builder.CreateCondBr(shouldLoop, free_push_loop_preheader,
+                             free_push_loop_exit);
+
+        // hook up phi node.
+        i->addIncoming(iNext, free_push_loop_body);
+        i->addIncoming(builder.getInt64(1), entry);
+
+        // exit---
+        builder.SetInsertPoint(free_push_loop_exit);
+        Value *fnSlot = builder.CreateGEP(
+            typedClosure, {builder.getInt64(0), builder.getInt32(1)},
+            "fn_slot");
+        Value *fn = builder.CreateLoad(fnSlot, "fn");
+        builder.CreateCall(fn, {});
         builder.CreateRetVoid();
         return F;
     }
@@ -513,8 +573,8 @@ void materializeEnterDynamicClosure(Value *V, Module &m, StgIRBuilder &builder,
     // assert(false && "entering dynamic closure");
 };
 
-// As always, the one who organises things (calls the function) does the work:
-// push params in reverse order.
+// As always, the one who organises things (calls the function) does the
+// work: push params in reverse order.
 void materializeAp(const ExpressionAp *ap, Module &m, StgIRBuilder &builder,
                    BuildCtx &bctx) {
     for (Atom *p : ap->params_reverse_range()) {
@@ -542,7 +602,7 @@ void materializeConstructor(const ExpressionConstructor *c, Module &m,
                             StgIRBuilder &builder, BuildCtx &bctx) {
     // TODO: refactor this to use DataLayout.
     int TotalSize = 8;  // for the tag.
-    for (Atom *a : c->args_range()) {
+    for (Atom *___ : c->args_range()) {
         // cast<AtomInt>(a);
         TotalSize += 4;  // bytes.
     }
@@ -683,8 +743,8 @@ Function *materializeCaseConstructorAlts(const ExpressionCase *c, Module &m,
 
     Value *TagPtr = builder.CreateIntToPtr(
         MemAddr, builder.getInt64Ty()->getPointerTo(), "tagptr");
-    // Since we only care about the tag, we can convert to i64 and forget about
-    // the rest.
+    // Since we only care about the tag, we can convert to i64 and forget
+    // about the rest.
     Value *Tag = builder.CreateLoad(TagPtr, "tag");
 
     BasicBlock *failure = BasicBlock::Create(m.getContext(), "failure", f);
@@ -707,8 +767,8 @@ Function *materializeCaseConstructorAlts(const ExpressionCase *c, Module &m,
                     getCommonDataTypeFromAlts(c, builder, bctx);
                 const int Tag = dataType->getIndexForConstructor(std::get<0>(
                     bctx.getDataConstructorFromName(d->getConstructorName())));
-                // teach the switch case to switch to this BB on encountering
-                // the tag.
+                // teach the switch case to switch to this BB on
+                // encountering the tag.
                 switch_->addCase(builder.getInt64(Tag), bb);
                 materializeCaseConstructorAltDestructure(c, d, MemAddr, m,
                                                          builder, bctx);
@@ -735,7 +795,8 @@ Function *materializeCaseConstructorAlts(const ExpressionCase *c, Module &m,
 // I'm doing it this way.
 void materializeCaseConstructor(const ExpressionCase *c, Module &m,
                                 StgIRBuilder &builder, BuildCtx &bctx) {
-    // NOTE: save insert BB because materializeCaseConstructorAlt changes this.
+    // NOTE: save insert BB because materializeCaseConstructorAlt changes
+    // this.
     BasicBlock *BB = builder.GetInsertBlock();
 
     const Identifier scrutineeName =
@@ -776,8 +837,8 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
 // out from the stack.
 //
 //
-// As always, the one who initiates something must take burden: callee pushes
-// stuff onto the stack (for free variables) in the reverse order.
+// As always, the one who initiates something must take burden: callee
+// pushes stuff onto the stack (for free variables) in the reverse order.
 // so, g = let f = \(a b c) (x y z) -> .. in alpha (f) 10 will become:
 //
 // g:
@@ -809,8 +870,8 @@ Value *_allocateLetBindingDynamicClosure(const Binding *b, BasicBlock *BB,
     const int sizeInBytes = m.getDataLayout().getTypeAllocSize(closureTy);
     Value *rawMem = builder.CreateCall(
         bctx.malloc, {builder.getInt64(sizeInBytes)}, "rawmem");
-    Value *typedMem =
-        builder.CreateBitCast(rawMem, closureTy->getPointerTo(), "closure_" + b->getName());
+    Value *typedMem = builder.CreateBitCast(rawMem, closureTy->getPointerTo(),
+                                            "closure_" + b->getName());
 
     Value *tagSlot = builder.CreateGEP(
         typedMem, {builder.getInt64(0), builder.getInt32(0)}, "tag_slot");
@@ -822,12 +883,12 @@ Value *_allocateLetBindingDynamicClosure(const Binding *b, BasicBlock *BB,
     return typedMem;
 }
 
-// Materialize the function that gets executed when a let-binding is evaluated.
-// NOTE: this is exactly the same thing as materializeTopLevelStaticBinding, except
-// that it also creates a static closure.
-// Consider mergining with materializeTopLevelStaticBinding
-Function *_materializeDynamicLetBinding(const Binding *b, Module &m, StgIRBuilder builder,
-        BuildCtx &bctx) {
+// Materialize the function that gets executed when a let-binding is
+// evaluated. NOTE: this is exactly the same thing as
+// materializeTopLevelStaticBinding, except that it also creates a static
+// closure. Consider mergining with materializeTopLevelStaticBinding
+Function *_materializeDynamicLetBinding(const Binding *b, Module &m,
+                                        StgIRBuilder builder, BuildCtx &bctx) {
     FunctionType *FTy =
         FunctionType::get(builder.getVoidTy(), /*isVarArg=*/false);
     Function *F =
@@ -856,15 +917,15 @@ void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
         bctx.insertIdentifier(b->getName(), cls);
     }
 
-
-    for(Binding *b : l->bindings_range()) {
+    for (Binding *b : l->bindings_range()) {
         Function *f = _materializeDynamicLetBinding(b, m, builder, bctx);
         Value *cls = bctx.getIdentifier(b->getName());
         // store this in the closure slot.
-        Value *fnSlot = builder.CreateGEP(cls, {builder.getInt64(0), builder.getInt32(1)}, "fn_slot");
+        Value *fnSlot = builder.CreateGEP(
+            cls, {builder.getInt64(0), builder.getInt32(1)}, "fn_slot");
         builder.CreateStore(f, fnSlot);
 
-        for(Parameter *p : b->getRhs()->free_params_range())
+        for (Parameter *___ : b->getRhs()->free_params_range())
             assert(false && "free parameters unimplemented.");
     }
 
@@ -937,7 +998,8 @@ LLVMClosureData materializeStaticClosureForFn(Function *F, std::string name,
 }
 
 LLVMClosureData materializeTopLevelStaticBinding(const Binding *b, Module &m,
-                                   StgIRBuilder &builder, BuildCtx &bctx) {
+                                                 StgIRBuilder &builder,
+                                                 BuildCtx &bctx) {
     FunctionType *FTy =
         FunctionType::get(builder.getVoidTy(), /*isVarArg=*/false);
     Function *F =
@@ -959,7 +1021,7 @@ StructType *materializeDataConstructor(const DataType *decl,
                                        const BuildCtx &bctx) {
     std::vector<Type *> Elements;
     Elements.push_back(builder.getInt64Ty());  // TAG.
-    for (TypeName *Name : b->types_range()) {
+    for (TypeName *____ : b->types_range()) {
         // HACK:
         Elements.push_back(builder.getInt64Ty());
         // Elements.push_back(bctx.getDataTypeName(*Name));
@@ -995,7 +1057,8 @@ int compile_program(stg::Program *program, int argc, char **argv) {
             entrystg = b;
         }
 
-        bctx.insertBinding(b, materializeTopLevelStaticBinding(b, *m, builder, bctx));
+        bctx.insertBinding(
+            b, materializeTopLevelStaticBinding(b, *m, builder, bctx));
     }
 
     if (verifyModule(*m, nullptr) == 1) {
