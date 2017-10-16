@@ -1,12 +1,16 @@
 # RUN: ./compile-and-run-program.sh %s | FileCheck %s
-# CHECK: 2
+# CHECK: 3
 
-data Int  = Int2 (PrimInt PrimInt);
+data Int2Ty = Int2Cons (PrimInt PrimInt);
 
-binding twothree = \() -> Int2 { Int2 (2 3) };
+binding i = \() -> Int2Ty { Int2Cons (2 3) };
 
-binding extract = \(x:Int) -> PrimInt { case x of
-    Int2 (x y) -> x (); };
+binding swap = \(x:Int2Ty) -> Int2Ty { case x of
+    Int2Cons (x y) -> Int2Cons (y x); };
+
+binding extractIntWrapped = \(x:Int2Ty) -> PrinInt { case x of
+    Int2Cons (x y) -> x (); 
+};
 
 binding compose = \(f:F g:F x:X) -> F { 
     let 
@@ -14,5 +18,9 @@ binding compose = \(f:F g:F x:X) -> F {
     in f (gx)
 };
 
+binding pullapart = \() -> PrimInt { compose (extractIntWrapped swap i) };
 
-binding main = \() -> Void { compose (printInt extract twothree) };
+binding main = \() -> Void { 
+    case pullapart of
+        default -> printInt ();
+};

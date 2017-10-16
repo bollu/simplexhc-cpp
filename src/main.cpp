@@ -175,6 +175,18 @@ class Scope {
 
     bool isInnermostScope() const { return !inner; }
 
+    template <typename FTy>
+    void dump(FTy F, unsigned nesting = 0) const {
+        errs() << "Child:\n";
+        if (inner) {
+            inner.getValue()->dump(F, nesting + 1);
+        }
+        errs() << "identifiers(child level=" << nesting << "): \n";
+        for (auto It : this->m) {
+            F(It.first, It.second, nesting);
+        }
+    }
+
     ~Scope() {
         if (inner) delete inner.getValue();
     }
@@ -186,7 +198,7 @@ class BuildCtx {
    public:
     using IdentifierMapTy = Scope<Identifier, AssertingVH<Value>>;
 
-    using BindingMapTy = std::map<Identifier, LLVMClosureData>;
+    using StaticBindingMapTy = std::map<Identifier, LLVMClosureData>;
 
     // a map from data constructors to the underlying DataConstructor
     using DataConstructorMap =
@@ -210,7 +222,7 @@ class BuildCtx {
     AssertingVH<GlobalVariable> heap;
     AssertingVH<GlobalVariable> heapTop;
 
-    AssertingVH<GlobalVariable> enteringFnAddr;
+    AssertingVH<GlobalVariable> enteringClosureAddr;
     AssertingVH<Function> enterDynamicClosure;
 
     static const unsigned MAX_FREE_PARAMS = 10;
@@ -247,11 +259,11 @@ class BuildCtx {
         addStack(m, builder, builder.getInt64Ty(), "Heap", HEAP_SIZE, pushHeap,
                  popHeap, heap, heapTop);
 
-        // *** enteringFnAddr ***
-        enteringFnAddr = new GlobalVariable(
+        // *** enteringClosureAddr ***
+        enteringClosureAddr = new GlobalVariable(
             m, builder.getInt64Ty(), /*isConstant=*/false,
             GlobalValue::ExternalLinkage,
-            ConstantInt::get(builder.getInt64Ty(), 0), "enteringFnAddr");
+            ConstantInt::get(builder.getInt64Ty(), 0), "enteringClosureAddr");
 
         // ClosureTy
         std::vector<Type *> StructMemberTys;
@@ -260,7 +272,7 @@ class BuildCtx {
         ClosureTy[0] = StructType::create(StructMemberTys, "Closure_Free0");
         for (unsigned i = 1; i < MAX_FREE_PARAMS; i++) {
             StructMemberTys = {builder.getInt64Ty(), ContTy->getPointerTo(),
-                               ArrayType::get(getRawMemTy(builder), i)};
+                               ArrayType::get(builder.getInt64Ty(), i)};
             ClosureTy[i] = StructType::create(
                 StructMemberTys, "Closure_Free" + std::to_string(i));
         }
@@ -295,6 +307,8 @@ class BuildCtx {
         assert(staticBindingMap.find(b->getName()) == staticBindingMap.end());
         // assert(false);
         staticBindingMap.insert(std::make_pair(b->getName(), bdata));
+
+        identifiermap.insert(b->getName(), &*bdata.closure);
     }
 
     // map an identifier to a value in the current scope.
@@ -311,6 +325,12 @@ class BuildCtx {
         auto It = identifiermap.find(ident);
         if (It == identifiermap.end()) {
             cerr << "Unknown identifier: " << ident << "\n";
+            identifiermap.dump([&](const Identifier &id,
+                                   const AssertingVH<Value> &v,
+                                   unsigned nesting) {
+                errs() << id << " => " << *v << "\n";
+            });
+            assert(false && "unable to find identifier");
         }
         assert(It != identifiermap.end());
         return It->second;
@@ -375,7 +395,7 @@ class BuildCtx {
     void popScope() { identifiermap.popScope(); }
 
     IdentifierMapTy identifiermap;
-    BindingMapTy staticBindingMap;
+    StaticBindingMapTy staticBindingMap;
     DataConstructorMap dataConstructorMap;
     DataTypeMap dataTypeMap;
 
@@ -471,13 +491,17 @@ class BuildCtx {
         BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
         builder.SetInsertPoint(entry);
         Argument *argInt = &*F->arg_begin();
-        argInt->setName("f_as_int");
+        argInt->setName("cls_as_int");
 
-        Value *argRawMem = builder.CreateIntToPtr(argInt, getRawMemTy(builder), "f_as_raw_mem");
-        Value *typedClosure =
-            builder.CreateBitCast(argRawMem, bctx.ClosureTy[bctx.MAX_FREE_PARAMS - 1]->getPointerTo(), "f_as_closure");
+        Value *argRawMem = builder.CreateIntToPtr(argInt, getRawMemTy(builder),
+                                                  "cls_as_raw_mem");
+        Value *typedClosure = builder.CreateBitCast(
+            argRawMem, bctx.ClosureTy[bctx.MAX_FREE_PARAMS - 1]->getPointerTo(),
+            "cls_as_closure");
 
-        Value *tagSlot = builder.CreateGEP(typedClosure, {builder.getInt64(0), builder.getInt32(0)}, "tag_slot");
+        Value *tagSlot = builder.CreateGEP(
+            typedClosure, {builder.getInt64(0), builder.getInt32(0)},
+            "tag_slot");
         Value *tag = builder.CreateLoad(tagSlot, "tag");
         Value *nFreeVars = builder.CreateSub(
             tag, builder.getInt64((unsigned)ClosureTag::FreeBegin),
@@ -494,8 +518,11 @@ class BuildCtx {
 
         // entry---
         builder.SetInsertPoint(entry);
-        Value *hasAnyFreeVars = builder.CreateICmpUGE(nFreeVars, builder.getInt64(1), "has_any_ree_vars");
-        builder.CreateCondBr(hasAnyFreeVars, free_push_loop_header, free_push_loop_exit);
+        Value *hasAnyFreeVars = builder.getFalse();
+        //Value *hasAnyFreeVars = builder.CreateICmpUGE(
+        //    nFreeVars, builder.getInt64(1), "has_any_free_vars");
+        builder.CreateCondBr(hasAnyFreeVars, free_push_loop_header,
+                             free_push_loop_exit);
 
         // preheader---"
         builder.SetInsertPoint(free_push_loop_header);
@@ -508,9 +535,18 @@ class BuildCtx {
         Value *shouldLoop =
             builder.CreateICmpULE(iNext, nFreeVars, "should_loop");
         // TODO: fill up loop with something useful
-        Function *trap = getOrCreateFunction(
-            m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
-        builder.CreateCall(trap, {});
+        // Push free parameters onto the stack.
+        Value *freeParamSlot = builder.CreateGEP(
+            typedClosure, {builder.getInt64(0), builder.getInt32(2), i},
+            "free_param_slot");
+        Value *freeParam = builder.CreateLoad(freeParamSlot, "free_param");
+        builder.CreateCall(bctx.pushInt, freeParam);
+
+#ifdef TRAP
+        // Function *trap = getOrCreateFunction(
+        //    m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
+        //builder.CreateCall(trap, {});
+#endif
         builder.CreateCondBr(shouldLoop, free_push_loop_header,
                              free_push_loop_exit);
 
@@ -524,6 +560,10 @@ class BuildCtx {
             typedClosure, {builder.getInt64(0), builder.getInt32(1)},
             "fn_slot");
         Value *fn = builder.CreateLoad(fnSlot, "fn");
+
+        // store the address of the closure we are entering
+        builder.CreateStore(argInt, bctx.enteringClosureAddr);
+        // call the function
         builder.CreateCall(fn, {});
         builder.CreateRetVoid();
         return F;
@@ -556,20 +596,15 @@ void materializeEnterStaticClosure(LLVMClosureData Cls, Module &m,
                                    StgIRBuilder &builder, BuildCtx &bctx) {
     // for now, assume that our functions have no free vars.
     Value *F = Cls.fn;
-    Value *FnAddr =
-        builder.CreatePtrToInt(F, builder.getInt64Ty(), "entering_fn_addr");
-    builder.CreateStore(FnAddr, bctx.enteringFnAddr);
+    Value *closureAddr = builder.CreatePtrToInt(
+        Cls.closure, builder.getInt64Ty(), "entering_closure_addr");
+    builder.CreateStore(closureAddr, bctx.enteringClosureAddr);
     CreateTailCall(builder, F, {});
 }
 
 void materializeEnterDynamicClosure(Value *V, Module &m, StgIRBuilder &builder,
                                     BuildCtx &bctx) {
     V = TransmuteToInt(V, builder);
-    errs() << "==" << __PRETTY_FUNCTION__ << ":" << __LINE__
-           << "enterDynamicClosure:\n";
-    errs() << *bctx.enterDynamicClosure;
-    errs() << "\nV: " << *V << "\n";
-    errs() << "--\n";
     builder.CreateCall(bctx.enterDynamicClosure, {V});
     // assert(false && "entering dynamic closure");
 };
@@ -897,6 +932,24 @@ Function *_materializeDynamicLetBinding(const Binding *b, Module &m,
 
     BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
     builder.SetInsertPoint(entry);
+
+    Value *closureAddr =
+        builder.CreateLoad(bctx.enteringClosureAddr, "closure_addr_int");
+    Value *closure = builder.CreateIntToPtr(
+        closureAddr, bctx.ClosureTy[b->getRhs()->free_params_size()]->getPointerTo(),
+        "closure_typed");
+    int i = 0;
+    BuildCtx::Scoper s(bctx);
+    for (Parameter *p : b->getRhs()->free_params_range()) {
+        Value *v = builder.CreateGEP(
+            closure,
+            {builder.getInt64(0), builder.getInt32(2), builder.getInt32(i)},
+            p->getName() + "slot");
+        v = builder.CreateLoad(v, p->getName());
+        bctx.insertIdentifier(p->getName(), v);
+        // builder.createGEP(bctx.enter
+        i++;
+    }
     materializeLambda(b->getRhs(), m, builder, bctx);
     builder.CreateRetVoid();
     return F;
@@ -922,12 +975,23 @@ void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
         Function *f = _materializeDynamicLetBinding(b, m, builder, bctx);
         Value *cls = bctx.getIdentifier(b->getName());
         // store this in the closure slot.
-        Value *fnSlot = builder.CreateGEP(
-            cls, {builder.getInt64(0), builder.getInt32(1)}, "fn_slot");
+        Value *fnSlot =
+            builder.CreateGEP(cls, {builder.getInt64(0), builder.getInt32(1)},
+                              b->getName() + "_fn_slot");
         builder.CreateStore(f, fnSlot);
 
-        for (Parameter *___ : b->getRhs()->free_params_range())
-            assert(false && "free parameters unimplemented.");
+        int i = 0;
+        for (Parameter *p : b->getRhs()->free_params_range()) {
+            Value *freeParamSlot = builder.CreateGEP(
+                cls,
+                {builder.getInt64(0), builder.getInt32(2), builder.getInt32(i)},
+                b->getName() + "_free_param_" + p->getName() + "_slot");
+            Value *v = bctx.getIdentifier(p->getName());
+            v = TransmuteToInt(v, builder);
+            builder.CreateStore(v, freeParamSlot);
+            i++;
+        }
+        // assert(false && "free parameters unimplemented.");
     }
 
     // TODO: codegen each binding. Fuck that for now.
@@ -990,8 +1054,6 @@ LLVMClosureData materializeStaticClosureForFn(Function *F, std::string name,
         return ConstantStruct::get(closureTy, initializer_list);
     }();
 
-    errs() << "initializer: " << *initializer << "\n";
-
     GlobalVariable *closure =
         new GlobalVariable(m, closureTy, /*isconstant=*/true,
                            GlobalValue::ExternalLinkage, initializer, name);
@@ -1001,6 +1063,8 @@ LLVMClosureData materializeStaticClosureForFn(Function *F, std::string name,
 LLVMClosureData materializeTopLevelStaticBinding(const Binding *b, Module &m,
                                                  StgIRBuilder &builder,
                                                  BuildCtx &bctx) {
+    assert(b->getRhs()->free_params_size() == 0 &&
+           "top level bindings cannot have any free paramters.");
     FunctionType *FTy =
         FunctionType::get(builder.getVoidTy(), /*isVarArg=*/false);
     Function *F =
@@ -1053,6 +1117,9 @@ int compile_program(stg::Program *program, int argc, char **argv) {
     }
 
     for (Binding *b : program->bindings_range()) {
+        cout << "==BINDING:==\n";
+        cout << *b << "\n";
+        cout << "----\n";
         if (b->getName() == "main") {
             assert(!entrystg && "program has more than one main.");
             entrystg = b;
@@ -1069,7 +1136,7 @@ int compile_program(stg::Program *program, int argc, char **argv) {
         cerr << "-----\n";
         cerr << " *** Broken module found, aborting compilation.\nError:\n";
         verifyModule(*m, &errs());
-        return 1;
+        exit(1);
     }
 
     m->print(outs(), nullptr);

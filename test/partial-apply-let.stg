@@ -9,7 +9,7 @@ binding two = \() -> A { IntCons (2) };
 binding k = \(x:A y:A) -> A { x () };
 binding main = \() -> Void { let 
                                 binding k1 = \() -> A { k (one) };
-                                binding k12 = \() -> A { k1 (two) };
+                                binding k12 = \(k1: F) () -> A { k1 (two) };
                              in case k12 of
                                     IntCons (x) -> printInt (x);
                            };
