@@ -33,17 +33,23 @@ using StgIRBuilder = IRBuilder<>;
 void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
                      BuildCtx &bctx);
 
-struct LLVMBindingData {
+struct LLVMClosureData {
     AssertingVH<Function> fn;
     AssertingVH<GlobalVariable> closure;
 
-    LLVMBindingData(Function *fn, GlobalVariable *closure)
+    LLVMClosureData(Function *fn, GlobalVariable *closure)
         : fn(fn), closure(closure){};
 };
-LLVMBindingData materializeBinding(const Binding *b, Module &m,
+LLVMClosureData materializeBinding(const Binding *b, Module &m,
                                    StgIRBuilder &builder, BuildCtx &bctx);
 void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
                        BuildCtx &bctx);
+
+LLVMClosureData materializeClosureForFn(Function *F, unsigned nFreeVars,
+                                        std::string name, Module &m,
+                                        StgIRBuilder &builder, BuildCtx &bctx);
+
+
 // http://web.iitd.ac.in/~sumeet/flex__bison.pdf
 // http://aquamentus.com/flex_bison.html
 
@@ -175,7 +181,7 @@ class BuildCtx {
    public:
     using IdentifierMapTy = Scope<Identifier, AssertingVH<Value>>;
 
-    using BindingMapTy = std::map<Identifier, LLVMBindingData>;
+    using BindingMapTy = std::map<Identifier, LLVMClosureData>;
 
     // a map from data constructors to the underlying DataConstructor
     using DataConstructorMap =
@@ -188,7 +194,8 @@ class BuildCtx {
     // TODO: do this when you have more free time :)
     // using ClosureTagMap = std::map<ClosureTag, AssertingVH<GlobalVariable>>;
 
-    AssertingVH<Function> printInt, popInt, pushInt;
+    AssertingVH<Function> popInt, pushInt;
+    LLVMClosureData *printInt;
     AssertingVH<Function> malloc;
     AssertingVH<Function> pushReturnCont, popReturnCont;
     AssertingVH<Function> pushHeap, popHeap;
@@ -211,13 +218,11 @@ class BuildCtx {
     AssertingVH<GlobalVariable> stackReturnContTop;
 
     BuildCtx(Module &m, StgIRBuilder &builder) {
+        // *** ContTy ***
+        ContTy = FunctionType::get(builder.getVoidTy(), {}, false);
+
         populateIntrinsicTypes(m, builder, dataTypeMap, dataConstructorMap);
 
-        printInt = getOrCreateFunction(m,
-                                       FunctionType::get(builder.getVoidTy(),
-                                                         /*isVarArg=*/false),
-                                       "printInt");
-        identifiermap.insert("printInt", AssertingVH<Value>(printInt));
 
         malloc = getOrCreateFunction(
             m,
@@ -229,7 +234,7 @@ class BuildCtx {
                  popInt, stackInt, stackIntTop);
 
         // type of returns.
-        addStack(m, builder, getVoidPointerTy(builder), "Return", STACK_SIZE,
+        addStack(m, builder, ContTy->getPointerTo(), "Return", STACK_SIZE,
                  pushReturnCont, popReturnCont, stackReturnCont,
                  stackReturnContTop);
 
@@ -243,9 +248,6 @@ class BuildCtx {
             GlobalValue::ExternalLinkage,
             ConstantInt::get(builder.getInt64Ty(), 0), "enteringFnAddr");
 
-        // ContTy
-        ContTy = FunctionType::get(builder.getVoidTy(), {}, false);
-
         // ClosureTy
         std::vector<Type *> StructMemberTys;
 
@@ -257,9 +259,21 @@ class BuildCtx {
             ClosureTy[i] = StructType::create(
                 StructMemberTys, "Closure_Free" + std::to_string(i));
         }
+
+        // Intrinsics: NOTE: can only be inited after closures have been inited.
+        // *** printInt *** //
+        printInt = [&] {
+            Function *F = getOrCreateFunction(
+                m, FunctionType::get(builder.getVoidTy(),
+                                     /*isVarArg=*/false), "printInt");
+            return new LLVMClosureData(materializeClosureForFn(
+                F, /*numfreevars*/ 0, "closure_printInt", m, builder, *this));
+        }();
+        this->bindingmap.insert(std::make_pair("printInt", *printInt));
     }
 
     ~BuildCtx() {
+        delete this->printInt;
         // delete this->stackReturnCont;
         // delete this->stackReturnContTop;
         // delete this->stackInt;
@@ -267,7 +281,7 @@ class BuildCtx {
     }
 
     // map a binding to a function in the given scope.
-    void insertBinding(Binding *b, LLVMBindingData bdata) {
+    void insertBinding(Binding *b, LLVMClosureData bdata) {
         assert(bindingmap.find(b->getName()) == bindingmap.end());
         // assert(false);
         bindingmap.insert(std::make_pair(b->getName(), bdata));
@@ -292,27 +306,39 @@ class BuildCtx {
         return It->second;
     }
 
-    AssertingVH<Value> getFunctionFromName(std::string name,
+    LLVMClosureData getClosureDataFromName(std::string name,
                                            StgIRBuilder &builder) const {
-        auto It = identifiermap.find(name);
-        if (It == identifiermap.end()) {
-            cerr << "unknown function: " << name << "\n";
-            assert(false && "function not found");
+        auto It = bindingmap.find(name);
+        if (It == bindingmap.end()) {
+            cerr << "unknown closure: " << name << "\n";
+            assert(false && "unknown closure");
         }
-        Value *V = It->second;
-        if (!isa<Function>(V)) {
-            Type *StgFunctionTy =
-                FunctionType::get(builder.getVoidTy(), {}, false);
-            errs() << "Found value that is not function: " << *V
-                   << ". Transmuting...\n";
-            if (isa<IntegerType>(V->getType())) {
-                V = builder.CreateIntToPtr(V, StgFunctionTy->getPointerTo(),
-                                           V->getName() + "_transmute_to_fn");
-            }
-            V = builder.CreateBitOrPointerCast(V,
-                                               StgFunctionTy->getPointerTo());
-        }
-        return V;
+        return It->second;
+
+        // 2. search in identifiermap
+        // {
+        //     auto It = identifiermap.find(name);
+        //     if (It == identifiermap.end()) {
+        //         cerr << "unknown function: " << name << "\n";
+        //     }
+        //     V = It->second;
+        // };
+
+        //     assert(V != nullptr && "function not found");
+        // if (!isa<Function>(V)) {
+        //     Type *StgFunctionTy =
+        //         FunctionType::get(builder.getVoidTy(), {}, false);
+        //     errs() << "Found value that is not function: " << *V
+        //            << ". Transmuting...\n";
+        //     if (isa<IntegerType>(V->getType())) {
+        //         V = builder.CreateIntToPtr(V, StgFunctionTy->getPointerTo(),
+        //                                    V->getName() +
+        //                                    "_transmute_to_fn");
+        //     }
+        //     V = builder.CreateBitOrPointerCast(V,
+        //                                        StgFunctionTy->getPointerTo());
+        // }
+        // return V;
     }
 
     // TODO: this cannot be structType because we can have things like
@@ -470,13 +496,14 @@ Value *materializeAtom(const Atom *a, StgIRBuilder &builder, BuildCtx &bctx) {
 }
 
 // materialize the code to enter into a closure.
-void materializeEnter(Value *Cont, Module &m, StgIRBuilder &builder,
+void materializeEnter(LLVMClosureData Cls, Module &m, StgIRBuilder &builder,
                       BuildCtx &bctx) {
+    // for now, assume that our functions have no free vars.
+    Value *F = Cls.fn;
     Value *FnAddr =
-        builder.CreatePtrToInt(Cont, builder.getInt64Ty(), "entering_fn_addr");
+        builder.CreatePtrToInt(F, builder.getInt64Ty(), "entering_fn_addr");
     builder.CreateStore(FnAddr, bctx.enteringFnAddr);
-    errs() << "Cont: " << *Cont << "\n";
-    CreateTailCall(builder, Cont, {});
+    CreateTailCall(builder, F, {});
 }
 
 // As always, the one who organises things (calls the function) does the work:
@@ -494,8 +521,8 @@ void materializeAp(const ExpressionAp *ap, Module &m, StgIRBuilder &builder,
         builder.CreateCall(bctx.pushInt, {v});
         errs() << __LINE__ << "\n";
     }
-    Value *Cont = bctx.getFunctionFromName(ap->getFnName(), builder);
-    materializeEnter(Cont, m, builder, bctx);
+    LLVMClosureData Cls = bctx.getClosureDataFromName(ap->getFnName(), builder);
+    materializeEnter(Cls, m, builder, bctx);
 };
 
 void materializeConstructor(const ExpressionConstructor *c, Module &m,
@@ -700,13 +727,14 @@ void materializeCaseConstructor(const ExpressionCase *c, Module &m,
 
     const Identifier scrutinee = cast<AtomIdent>(c->getScrutinee())->getIdent();
     // TODO: come up with a notion of scope.
-    Value *Next = bctx.getFunctionFromName(scrutinee, builder);
+    LLVMClosureData NextCls = bctx.getClosureDataFromName(scrutinee, builder);
     // push a return continuation for the function `Next` to follow.
     Function *AltHandler = materializeCaseConstructorAlts(c, m, builder, bctx);
 
     builder.SetInsertPoint(BB);
     builder.CreateCall(bctx.pushReturnCont, {AltHandler});
-    CreateTailCall(builder, Next, {});
+    materializeEnter(NextCls, m, builder, bctx);
+    // CreateTailCall(builder, Next, {});
 }
 
 void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
@@ -855,7 +883,35 @@ void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
     materializeExpr(l->getRhs(), m, builder, bctx);
 }
 
-LLVMBindingData materializeBinding(const Binding *b, Module &m,
+LLVMClosureData materializeClosureForFn(Function *F, unsigned nFreeVars,
+                                        std::string name, Module &m,
+                                        StgIRBuilder &builder, BuildCtx &bctx) {
+    assert(nFreeVars <= bctx.MAX_FREE_PARAMS);
+    StructType *closureTy = bctx.ClosureTy[nFreeVars];
+
+    // 2. Create the initializer for the closure
+    Constant *initializer = [&] {
+        std::vector<Constant *> initializer_list;
+        // tag.
+        initializer_list.push_back(ConstantInt::get(
+            builder.getInt64Ty(), (unsigned)ClosureTag::FreeBegin + nFreeVars));
+        // function (to jump into)
+        initializer_list.push_back(F);
+        // free vars
+
+        assert(nFreeVars == 0 && "free variables not supported yet.");
+        return ConstantStruct::get(closureTy, initializer_list);
+    }();
+
+    errs() << "initializer: " << *initializer << "\n";
+
+    GlobalVariable *closure =
+        new GlobalVariable(m, closureTy, /*isconstant=*/true,
+                           GlobalValue::ExternalLinkage, initializer, name);
+    return LLVMClosureData(F, closure);
+}
+
+LLVMClosureData materializeBinding(const Binding *b, Module &m,
                                    StgIRBuilder &builder, BuildCtx &bctx) {
     FunctionType *FTy =
         FunctionType::get(builder.getVoidTy(), /*isVarArg=*/false);
@@ -867,31 +923,9 @@ LLVMBindingData materializeBinding(const Binding *b, Module &m,
     materializeLambda(b->getRhs(), m, builder, bctx);
     builder.CreateRetVoid();
 
-    int nFreeVars = b->getRhs()->free_params_size();
-    assert(nFreeVars <= bctx.MAX_FREE_PARAMS);
-    StructType *closureTy = bctx.ClosureTy[nFreeVars];
-
-    // 2. Create the initializer for the closure
-    Constant *initializer = [&] { 
-        std::vector<Constant *> initializer_list;
-        // tag.
-        initializer_list.push_back(ConstantInt::get(
-                    builder.getInt64Ty(), (unsigned)ClosureTag::FreeBegin + nFreeVars));
-        // function (to jump into)
-        initializer_list.push_back(F);
-        // free vars
-
-        assert(nFreeVars == 0 && "free variables not supported yet.");
-        return ConstantStruct::get(closureTy, initializer_list);
-    }();
-
-    errs() << "initializer: " << *initializer << "\n";
-
-
-    GlobalVariable *closure = new GlobalVariable(
-        m, closureTy, /*isconstant=*/true, GlobalValue::ExternalLinkage,
-        initializer, b->getName() + "_closure");
-    return LLVMBindingData(F, closure);
+    const int nFreeVars = b->getRhs()->free_params_size();
+    return materializeClosureForFn(F, nFreeVars, b->getName() + "_closure", m,
+                                   builder, bctx);
 }
 
 // construct a StructType for a DataConstructor
