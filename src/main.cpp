@@ -45,10 +45,9 @@ LLVMClosureData materializeBinding(const Binding *b, Module &m,
 void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
                        BuildCtx &bctx);
 
-LLVMClosureData materializeStaticClosureForFn(Function *F,
-                                        std::string name, Module &m,
-                                        StgIRBuilder &builder, BuildCtx &bctx);
-
+LLVMClosureData materializeStaticClosureForFn(Function *F, std::string name,
+                                              Module &m, StgIRBuilder &builder,
+                                              BuildCtx &bctx);
 
 // http://web.iitd.ac.in/~sumeet/flex__bison.pdf
 // http://aquamentus.com/flex_bison.html
@@ -90,7 +89,8 @@ static Value *TransmuteToInt(Value *V, StgIRBuilder &builder) {
                                   V->getName() + "_transmute_to_int");
 }
 
-static Type *getVoidPointerTy(StgIRBuilder &builder) {
+// RawMem == void * (in C) == char * == i8* (in LLVM)
+static Type *getRawMemTy(StgIRBuilder &builder) {
     return builder.getInt8Ty()->getPointerTo();
 }
 
@@ -224,7 +224,6 @@ class BuildCtx {
 
         populateIntrinsicTypes(m, builder, dataTypeMap, dataConstructorMap);
 
-
         malloc = getOrCreateFunction(
             m,
             FunctionType::get(builder.getInt8Ty()->getPointerTo(),
@@ -256,7 +255,7 @@ class BuildCtx {
         ClosureTy[0] = StructType::create(StructMemberTys, "Closure_Free0");
         for (unsigned i = 1; i < MAX_FREE_PARAMS; i++) {
             StructMemberTys = {builder.getInt64Ty(), ContTy,
-                               ArrayType::get(getVoidPointerTy(builder), i)};
+                               ArrayType::get(getRawMemTy(builder), i)};
             ClosureTy[i] = StructType::create(
                 StructMemberTys, "Closure_Free" + std::to_string(i));
         }
@@ -264,16 +263,18 @@ class BuildCtx {
         // Intrinsics: NOTE: can only be inited after closures have been inited.
         // *** printInt *** //
         printInt = [&] {
-            Function *F = getOrCreateFunction(
-                m, FunctionType::get(builder.getVoidTy(),
-                                     /*isVarArg=*/false), "printInt");
+            Function *F =
+                getOrCreateFunction(m,
+                                    FunctionType::get(builder.getVoidTy(),
+                                                      /*isVarArg=*/false),
+                                    "printInt");
             return new LLVMClosureData(materializeStaticClosureForFn(
                 F, "closure_printInt", m, builder, *this));
         }();
         this->staticBindingMap.insert(std::make_pair("printInt", *printInt));
 
         // *** enter dynamic closure ***
-        enterDynamicClosure = addEnterDynamicClosureToModule(m, builder);
+        enterDynamicClosure = addEnterDynamicClosureToModule(m, builder, *this);
     }
 
     ~BuildCtx() {
@@ -310,12 +311,13 @@ class BuildCtx {
         return It->second;
     }
 
-    Optional<LLVMClosureData> getStaticClosureDataFromName(std::string name,
-                                           StgIRBuilder &builder) const {
+    Optional<LLVMClosureData> getStaticClosureDataFromName(
+        std::string name, StgIRBuilder &builder) const {
         auto It = staticBindingMap.find(name);
         if (It == staticBindingMap.end()) {
             cerr << "unknown closure: " << name << "\n";
-            assert(false && "unknown closure");
+            // assert(false && "unknown closure");
+            return None;
         }
         return It->second;
     }
@@ -452,9 +454,14 @@ class BuildCtx {
         builder.CreateRet(Ret);
     }
 
-    static Function *addEnterDynamicClosureToModule(Module &m, StgIRBuilder builder) {
-        Function *F = getOrCreateFunction(m, FunctionType::get(builder.getVoidTy(), {}, /*varargs*/ false),
-        "enter_dynamic_closure");
+    static Function *addEnterDynamicClosureToModule(Module &m,
+                                                    StgIRBuilder builder,
+                                                    BuildCtx &bctx) {
+        Function *F = getOrCreateFunction(
+            m,
+            FunctionType::get(builder.getVoidTy(), {builder.getInt64Ty()},
+                              /*varargs = */ false),
+            "enter_dynamic_closure");
         BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
         builder.SetInsertPoint(entry);
         builder.CreateRetVoid();
@@ -484,8 +491,8 @@ Value *materializeAtom(const Atom *a, StgIRBuilder &builder, BuildCtx &bctx) {
 }
 
 // materialize the code to enter into a closure.
-void materializeEnterStaticClosure(LLVMClosureData Cls, Module &m, StgIRBuilder &builder,
-                      BuildCtx &bctx) {
+void materializeEnterStaticClosure(LLVMClosureData Cls, Module &m,
+                                   StgIRBuilder &builder, BuildCtx &bctx) {
     // for now, assume that our functions have no free vars.
     Value *F = Cls.fn;
     Value *FnAddr =
@@ -494,10 +501,16 @@ void materializeEnterStaticClosure(LLVMClosureData Cls, Module &m, StgIRBuilder 
     CreateTailCall(builder, F, {});
 }
 
-void materializeEnterDynamicClosure(Value *V, Module &m, StgIRBuilder &builder, BuildCtx &bctx) {
-    // we need to lookup the free vars dynamically and push it onto the stack.
-    CreateTailCall(builder, bctx.enterDynamicClosure, {V});
-        assert(false && "entering dynamic closure");
+void materializeEnterDynamicClosure(Value *V, Module &m, StgIRBuilder &builder,
+                                    BuildCtx &bctx) {
+    V = TransmuteToInt(V, builder);
+    errs() << "==" << __PRETTY_FUNCTION__ << ":" << __LINE__
+           << "enterDynamicClosure:\n";
+    errs() << *bctx.enterDynamicClosure;
+    errs() << "\nV: " << *V << "\n";
+    errs() << "--\n";
+    builder.CreateCall(bctx.enterDynamicClosure, {V});
+    // assert(false && "entering dynamic closure");
 };
 
 // As always, the one who organises things (calls the function) does the work:
@@ -515,12 +528,13 @@ void materializeAp(const ExpressionAp *ap, Module &m, StgIRBuilder &builder,
         builder.CreateCall(bctx.pushInt, {v});
         errs() << __LINE__ << "\n";
     }
-    Optional<LLVMClosureData> Cls = bctx.getStaticClosureDataFromName(ap->getFnName(), builder);
+    Optional<LLVMClosureData> Cls =
+        bctx.getStaticClosureDataFromName(ap->getFnName(), builder);
     if (Cls) {
         materializeEnterStaticClosure(*Cls, m, builder, bctx);
     } else {
-         Value *V = bctx.getIdentifier(ap->getFnName());
-         materializeEnterDynamicClosure(V, m, builder, bctx);
+        Value *V = bctx.getIdentifier(ap->getFnName());
+        materializeEnterDynamicClosure(V, m, builder, bctx);
     }
 };
 
@@ -724,16 +738,23 @@ void materializeCaseConstructor(const ExpressionCase *c, Module &m,
     // NOTE: save insert BB because materializeCaseConstructorAlt changes this.
     BasicBlock *BB = builder.GetInsertBlock();
 
-    const Identifier scrutinee = cast<AtomIdent>(c->getScrutinee())->getIdent();
+    const Identifier scrutineeName =
+        cast<AtomIdent>(c->getScrutinee())->getIdent();
     // TODO: come up with a notion of scope.
     // In the case of constructor, the static closure entry _must_ exist.
-    Optional<LLVMClosureData> NextCls = bctx.getStaticClosureDataFromName(scrutinee, builder);
+    Optional<LLVMClosureData> NextCls =
+        bctx.getStaticClosureDataFromName(scrutineeName, builder);
     // push a return continuation for the function `Next` to follow.
     Function *AltHandler = materializeCaseConstructorAlts(c, m, builder, bctx);
 
     builder.SetInsertPoint(BB);
     builder.CreateCall(bctx.pushReturnCont, {AltHandler});
-    materializeEnterStaticClosure(*NextCls, m, builder, bctx);
+    if (NextCls)
+        materializeEnterStaticClosure(*NextCls, m, builder, bctx);
+    else {
+        Value *V = bctx.getIdentifier(scrutineeName);
+        materializeEnterDynamicClosure(V, m, builder, bctx);
+    }
     // CreateTailCall(builder, Next, {});
 }
 
@@ -776,29 +797,29 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
 //
 
 // Copied from materializeBinding - consider merging with.
-void materializeLetBinding(Function *F, const Binding *b, Module &m,
-                           StgIRBuilder &builder, BuildCtx &bctx) {
-    BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
-    builder.SetInsertPoint(entry);
+Value *_allocateLetBindingDynamicClosure(const Binding *b, BasicBlock *BB,
+                                         Module &m, StgIRBuilder builder,
+                                         BuildCtx &bctx) {
+    const int nFreeParams = b->getRhs()->free_params_size();
+    assert(nFreeParams < bctx.MAX_FREE_PARAMS);
 
-    // loop over the free parameters. These we would have in the scope
-    // of our let function, but we need to use the closure struct to get
-    // access to them.
-    BuildCtx::Scoper s(bctx);
-    int i = 0;
+    Type *closureTy = bctx.ClosureTy[nFreeParams];
+    builder.SetInsertPoint(BB);
 
-    for (const Parameter *p : b->getRhs()->free_params_range()) {
-        // HACK,WRONG: it should index the heap
-        Value *Idx =
-            builder.CreateGEP(bctx.enteringFnAddr, {builder.getInt64(i + 1)},
-                              "free_" + p->getName() + "_idx");
-        Value *v = builder.CreateLoad(Idx, "free_" + p->getName());
-        bctx.insertIdentifier(p->getName(), v);
-        i++;
-    }
+    const int sizeInBytes = m.getDataLayout().getTypeAllocSize(closureTy);
+    Value *rawMem = builder.CreateCall(
+        bctx.malloc, {builder.getInt64(sizeInBytes)}, "rawmem");
+    Value *typedMem =
+        builder.CreateBitCast(rawMem, closureTy->getPointerTo(), "closure");
 
-    materializeLambda(b->getRhs(), m, builder, bctx);
-    builder.CreateRetVoid();
+    Value *tagSlot = builder.CreateGEP(
+        typedMem, {builder.getInt64(0), builder.getInt32(0)}, "tag_slot");
+    builder.CreateStore(
+        builder.getInt64((unsigned)ClosureTag::FreeBegin + nFreeParams),
+        tagSlot);
+
+    // no store to function slot, args. These come later.
+    return typedMem;
 }
 void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
                     BuildCtx &bctx) {
@@ -806,46 +827,20 @@ void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
 
     // Open a new scope.---
     BuildCtx::Scoper scoper(bctx);
-    // 1. Create stubs for all bindings.
-    std::map<Binding *, Function *> bindingToEntryFunc;
+
+    // allocate memory slots for each binding.
     for (Binding *b : l->bindings_range()) {
-        Function *bf = getOrCreateContFunc(m, builder, b->getName());
-        bindingToEntryFunc[b] = bf;
-        bctx.insertIdentifier(b->getName(), bf);
+        Value *cls =
+            _allocateLetBindingDynamicClosure(b, Entry, m, builder, bctx);
+        bctx.insertIdentifier(b->getName(), cls);
     }
+    errs() << *Entry << "\n";
 
-    // 2. Fill in stubs
-    for (auto It : bindingToEntryFunc) {
-        Function *bf = It.second;
-        const Binding *b = It.first;
-        materializeLetBinding(bf, b, m, builder, bctx);
-    }
-
-    // 3. Create Heap closures for all stub bindings, create a scope
-    // for the RHS to use.
-    builder.SetInsertPoint(Entry);
-    for (auto It : bindingToEntryFunc) {
-        Function *bf = It.second;
-        const Binding *b = It.first;
-        Value *HeapTop = builder.CreateLoad(
-            bctx.heapTop, "heap_top_" + b->getName() + "_loc");
-        HeapTop = TransmuteToCont(HeapTop, builder);
-
-        Value *bfTransmuted = TransmuteToInt(bf, builder);
-        builder.CreateCall(bctx.pushHeap, {bfTransmuted});
-
-        // push heap values
-        for (const Parameter *p : b->getRhs()->free_params_range()) {
-            Value *v = bctx.getIdentifier(p->getName());
-            builder.CreateCall(bctx.pushHeap, {v});
-        }
-        bctx.replaceIdentifier(b->getName(), HeapTop);
-    }
+    // TODO: codegen each binding. Fuck that for now.
 
     // Now create heap locations for these bad boys and
     // set those heap locations to be the "correct"
     // locations.
-
     materializeExpr(l->getRHS(), m, builder, bctx);
 };
 
@@ -883,9 +878,9 @@ void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
     materializeExpr(l->getRhs(), m, builder, bctx);
 }
 
-LLVMClosureData materializeStaticClosureForFn(Function *F,
-                                        std::string name, Module &m,
-                                        StgIRBuilder &builder, BuildCtx &bctx) {
+LLVMClosureData materializeStaticClosureForFn(Function *F, std::string name,
+                                              Module &m, StgIRBuilder &builder,
+                                              BuildCtx &bctx) {
     StructType *closureTy = bctx.ClosureTy[0];
 
     // 2. Create the initializer for the closure
@@ -922,7 +917,7 @@ LLVMClosureData materializeBinding(const Binding *b, Module &m,
     builder.CreateRetVoid();
 
     return materializeStaticClosureForFn(F, b->getName() + "_closure", m,
-                                   builder, bctx);
+                                         builder, bctx);
 }
 
 // construct a StructType for a DataConstructor
