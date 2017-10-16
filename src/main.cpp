@@ -485,8 +485,8 @@ class BuildCtx {
         // typecast it to the "largest" possible, because at max, we will index
         // it till the max.
 
-        BasicBlock *free_push_loop_preheader =
-            BasicBlock::Create(m.getContext(), "free_push_loop_preheader", F);
+        BasicBlock *free_push_loop_header =
+            BasicBlock::Create(m.getContext(), "free_push_loop_header", F);
         BasicBlock *free_push_loop_body =
             BasicBlock::Create(m.getContext(), "free_push_loop_body", F);
         BasicBlock *free_push_loop_exit =
@@ -494,10 +494,11 @@ class BuildCtx {
 
         // entry---
         builder.SetInsertPoint(entry);
-        builder.CreateBr(free_push_loop_preheader);
+        Value *hasAnyFreeVars = builder.CreateICmpUGE(nFreeVars, builder.getInt64(1), "has_any_ree_vars");
+        builder.CreateCondBr(hasAnyFreeVars, free_push_loop_header, free_push_loop_exit);
 
         // preheader---"
-        builder.SetInsertPoint(free_push_loop_preheader);
+        builder.SetInsertPoint(free_push_loop_header);
         PHINode *i = builder.CreatePHI(builder.getInt64Ty(), 2, "i");
         builder.CreateBr(free_push_loop_body);
 
@@ -510,7 +511,7 @@ class BuildCtx {
         Function *trap = getOrCreateFunction(
             m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
         builder.CreateCall(trap, {});
-        builder.CreateCondBr(shouldLoop, free_push_loop_preheader,
+        builder.CreateCondBr(shouldLoop, free_push_loop_header,
                              free_push_loop_exit);
 
         // hook up phi node.
