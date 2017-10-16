@@ -20,14 +20,25 @@ using namespace std;
 using namespace stg;
 using namespace llvm;
 
+enum class ClosureTag {
+    FullySaturated = 0,
+    FreeBegin,  // closures with free params. For n free params, should be
+                // FreeBegin + n.
+};
+
 class BuildCtx;
 
 using StgIRBuilder = IRBuilder<>;
 
 void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
                      BuildCtx &bctx);
-Function *materializeBinding(const Binding *b, Module &m, StgIRBuilder &builder,
-                             BuildCtx &bctx);
+
+struct LLVMBindingData {
+    Function *fn;
+    GlobalValue *closure;
+};
+LLVMBindingData materializeBinding(const Binding *b, Module &m,
+                                   StgIRBuilder &builder, BuildCtx &bctx);
 void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
                        BuildCtx &bctx);
 // http://web.iitd.ac.in/~sumeet/flex__bison.pdf
@@ -65,8 +76,13 @@ static Value *TransmuteToCont(Value *V, StgIRBuilder &builder) {
 }
 
 static Value *TransmuteToInt(Value *V, StgIRBuilder &builder) {
+    if (V->getType()->isIntegerTy()) return V;
     return builder.CreatePtrToInt(V, builder.getInt64Ty(),
                                   V->getName() + "_transmute_to_int");
+}
+
+static Type *getVoidPointerTy(StgIRBuilder &builder) {
+    return builder.getInt8Ty()->getPointerTo();
 }
 
 template <typename K, typename V>
@@ -88,6 +104,15 @@ class Scope {
             inner.getValue()->insert(k, v);
         else {
             assert(m.find(k) == m.end());
+            m[k] = v;
+        }
+    }
+
+    void replace(K k, V v) {
+        if (inner)
+            inner.getValue()->replace(k, v);
+        else {
+            assert(m.find(k) != m.end());
             m[k] = v;
         }
     }
@@ -154,6 +179,10 @@ class BuildCtx {
     // a map from data types to their underlying DataType.
     using DataTypeMap = std::map<TypeName, DataType *>;
 
+    // Closure tags to global variables representing ints.
+    // TODO: do this when you have more free time :)
+    // using ClosureTagMap = std::map<ClosureTag, AssertingVH<GlobalVariable>>;
+
     AssertingVH<Function> printInt, popInt, pushInt;
     AssertingVH<Function> malloc;
     AssertingVH<Function> pushReturnCont, popReturnCont;
@@ -166,8 +195,11 @@ class BuildCtx {
 
     AssertingVH<GlobalVariable> enteringFnAddr;
 
+    static const unsigned MaxFreeParams = 10;
+    // type of closure { i64 tag, () -> () fn, <free vars> }
+    StructType *ClosureTy[MaxFreeParams];
     // type of values in return stack: () -> ()
-    Type *ReturnContTy;
+    Type *ContTy;
     // stack of return values, in reality a large array
     AssertingVH<GlobalVariable> stackReturnCont;
     // pointer to offset to top of return stack.
@@ -192,23 +224,35 @@ class BuildCtx {
                  popInt, stackInt, stackIntTop);
 
         // type of returns.
-        ReturnContTy =
-            FunctionType::get(builder.getVoidTy(), {}, /*isVarArg=*/false)
-                ->getPointerTo();
-        addStack(m, builder, ReturnContTy, "Return", STACK_SIZE, pushReturnCont,
-                 popReturnCont, stackReturnCont, stackReturnContTop);
+        addStack(m, builder, getVoidPointerTy(builder), "Return", STACK_SIZE,
+                 pushReturnCont, popReturnCont, stackReturnCont,
+                 stackReturnContTop);
 
         // *** Heap ***
         addStack(m, builder, builder.getInt64Ty(), "Heap", HEAP_SIZE, pushHeap,
                  popHeap, heap, heapTop);
-
-        // *** Return */
 
         // *** enteringFnAddr ***
         enteringFnAddr = new GlobalVariable(
             m, builder.getInt64Ty(), /*isConstant=*/false,
             GlobalValue::ExternalLinkage,
             ConstantInt::get(builder.getInt64Ty(), 0), "enteringFnAddr");
+
+
+        // ContTy
+        ContTy = FunctionType::get(builder.getVoidTy(), {}, false);
+
+        // ClosureTy
+        std::vector<Type *> StructMemberTys;
+
+        StructMemberTys = {builder.getInt64Ty(), ContTy};
+        ClosureTy[0] = StructType::create(StructMemberTys, "Closure_Free0");
+        for (unsigned i = 1; i < MaxFreeParams; i++) {
+            StructMemberTys = {builder.getInt64Ty(), ContTy,
+                               ArrayType::get(getVoidPointerTy(builder), i)};
+            ClosureTy[i] = StructType::create(
+                StructMemberTys, "Closure_Free" + std::to_string(i));
+        }
     }
 
     ~BuildCtx() {
@@ -219,8 +263,9 @@ class BuildCtx {
     }
 
     // map a binding to a function in the given scope.
-    void insertBinding(Binding *b, Function *f) {
-        identifiermap.insert(b->getName(), f);
+    void insertBinding(Binding *b, LLVMBindingData bdata) {
+        assert(false);
+        // identifiermap.insert(b->getName(), f);
     }
 
     // map an identifier to a value in the current scope.
@@ -228,6 +273,10 @@ class BuildCtx {
         identifiermap.insert(ident, v);
     }
 
+    // replace an identifier that is known to exist. asserts that
+    void replaceIdentifier(Identifier ident, Value *v) {
+        identifiermap.replace(ident, v);
+    }
     // lookup an identifier form the current scope
     AssertingVH<Value> getIdentifier(Identifier ident) {
         auto It = identifiermap.find(ident);
@@ -448,7 +497,7 @@ void materializeConstructor(const ExpressionConstructor *c, Module &m,
     // TODO: refactor this to use DataLayout.
     int TotalSize = 8;  // for the tag.
     for (Atom *a : c->args_range()) {
-        cast<AtomInt>(a);
+        // cast<AtomInt>(a);
         TotalSize += 4;  // bytes.
     }
     DataConstructor *cons;
@@ -468,13 +517,14 @@ void materializeConstructor(const ExpressionConstructor *c, Module &m,
     // Push values into the constructed value
     unsigned i = 1;
     for (Atom *a : c->args_range()) {
-        AtomInt *ai = cast<AtomInt>(a);
+        // AtomInt *ai = cast<AtomInt>(a);
         std::vector<Value *> idxs = {builder.getInt64(0), builder.getInt32(i)};
         Value *indexedMem = builder.CreateGEP(
             typedMem, idxs, "indexedmem_" + std::to_string(i));
 
-        Value *v = materializeAtom(ai, builder, bctx);
+        Value *v = materializeAtom(a, builder, bctx);
         v->setName("param_" + std::to_string(i));
+        v = TransmuteToInt(v, builder);
         builder.CreateStore(v, indexedMem);
         i++;
     }
@@ -707,8 +757,8 @@ void materializeLetBinding(Function *F, const Binding *b, Module &m,
         // HACK,WRONG: it should index the heap
         Value *Idx =
             builder.CreateGEP(bctx.enteringFnAddr, {builder.getInt64(i + 1)},
-                              "heap_" + p->getName() + "_idx");
-        Value *v = builder.CreateLoad(Idx);
+                              "free_" + p->getName() + "_idx");
+        Value *v = builder.CreateLoad(Idx, "free_" + p->getName());
         bctx.insertIdentifier(p->getName(), v);
         i++;
     }
@@ -720,17 +770,15 @@ void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
                     BuildCtx &bctx) {
     BasicBlock *Entry = builder.GetInsertBlock();
 
-
     // Open a new scope.---
     BuildCtx::Scoper scoper(bctx);
     // 1. Create stubs for all bindings.
     std::map<Binding *, Function *> bindingToEntryFunc;
     for (Binding *b : l->bindings_range()) {
-        Function *bf =  getOrCreateContFunc(m, builder, b->getName());
+        Function *bf = getOrCreateContFunc(m, builder, b->getName());
         bindingToEntryFunc[b] = bf;
         bctx.insertIdentifier(b->getName(), bf);
     }
-
 
     // 2. Fill in stubs
     for (auto It : bindingToEntryFunc) {
@@ -739,8 +787,8 @@ void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
         materializeLetBinding(bf, b, m, builder, bctx);
     }
 
-    //3. Create Heap closures for all stub bindings, create a scope
-    //for the RHS to use.
+    // 3. Create Heap closures for all stub bindings, create a scope
+    // for the RHS to use.
     builder.SetInsertPoint(Entry);
     for (auto It : bindingToEntryFunc) {
         Function *bf = It.second;
@@ -757,6 +805,7 @@ void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
             Value *v = bctx.getIdentifier(p->getName());
             builder.CreateCall(bctx.pushHeap, {v});
         }
+        bctx.replaceIdentifier(b->getName(), HeapTop);
     }
 
     // Now create heap locations for these bad boys and
@@ -800,8 +849,8 @@ void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
     materializeExpr(l->getRhs(), m, builder, bctx);
 }
 
-Function *materializeBinding(const Binding *b, Module &m, StgIRBuilder &builder,
-                             BuildCtx &bctx) {
+LLVMBindingData materializeBinding(const Binding *b, Module &m,
+                                   StgIRBuilder &builder, BuildCtx &bctx) {
     FunctionType *FTy =
         FunctionType::get(builder.getVoidTy(), /*isVarArg=*/false);
     Function *F =
@@ -811,7 +860,11 @@ Function *materializeBinding(const Binding *b, Module &m, StgIRBuilder &builder,
     builder.SetInsertPoint(entry);
     materializeLambda(b->getRhs(), m, builder, bctx);
     builder.CreateRetVoid();
-    return F;
+
+    LLVMBindingData data;
+    GlobalVariable *bindingCls = nullptr;
+    assert(false);
+    return data;
 }
 
 // construct a StructType for a DataConstructor
@@ -822,7 +875,9 @@ StructType *materializeDataConstructor(const DataType *decl,
     std::vector<Type *> Elements;
     Elements.push_back(builder.getInt64Ty());  // TAG.
     for (TypeName *Name : b->types_range()) {
-        Elements.push_back(get<1>(bctx.getDataConstructorFromName(*Name)));
+        // HACK:
+        Elements.push_back(builder.getInt64Ty());
+        // Elements.push_back(bctx.getDataTypeName(*Name));
     }
 
     StructType *Ty =
