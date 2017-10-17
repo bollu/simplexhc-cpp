@@ -63,6 +63,19 @@ static AssertingVH<Function> getOrCreateFunction(Module &m, FunctionType *FTy,
     return Function::Create(FTy, GlobalValue::ExternalLinkage, name, &m);
 }
 
+static AssertingVH<Function> createNewFunction(Module &m, FunctionType *FTy,
+                                            std::string name) {
+    Function *F = m.getFunction(name);
+    if (F) {
+        errs() << "Function with name:(" << name << ") already exists:\n";
+        F->print(errs());
+        errs() << "\n";
+        assert(false && "function with name already exists.\n");
+    }
+
+    return Function::Create(FTy, GlobalValue::ExternalLinkage, name, &m);
+}
+
 /*
 static AssertingVH<Function> getOrCreateContFunc(Module &m,
                                                  StgIRBuilder builder,
@@ -241,7 +254,7 @@ class BuildCtx {
 
         populateIntrinsicTypes(m, builder, dataTypeMap, dataConstructorMap);
 
-        malloc = getOrCreateFunction(
+        malloc = createNewFunction(
             m,
             FunctionType::get(builder.getInt8Ty()->getPointerTo(),
                               {builder.getInt64Ty()}, false),
@@ -281,7 +294,7 @@ class BuildCtx {
         // *** printInt *** //
         printInt = [&] {
             Function *F =
-                getOrCreateFunction(m,
+                createNewFunction(m,
                                     FunctionType::get(builder.getVoidTy(),
                                                       /*isVarArg=*/false),
                                     "printInt");
@@ -415,10 +428,10 @@ class BuildCtx {
                          AssertingVH<Function> &popFn,
                          AssertingVH<GlobalVariable> &stack,
                          AssertingVH<GlobalVariable> &stackTop) {
-        popFn = getOrCreateFunction(
+        popFn = createNewFunction(
             m, FunctionType::get(elemTy, /*isVarArg=*/false), "pop" + name);
         pushFn =
-            getOrCreateFunction(m,
+            createNewFunction(m,
                                 FunctionType::get(builder.getVoidTy(), {elemTy},
                                                   /*isVarArg=*/false),
                                 "push" + name);
@@ -482,7 +495,7 @@ class BuildCtx {
     static Function *addEnterDynamicClosureToModule(Module &m,
                                                     StgIRBuilder builder,
                                                     BuildCtx &bctx) {
-        Function *F = getOrCreateFunction(
+        Function *F = createNewFunction(
             m,
             FunctionType::get(builder.getVoidTy(), {builder.getInt64Ty()},
                               /*varargs = */ false),
@@ -519,7 +532,7 @@ class BuildCtx {
         // entry---
         builder.SetInsertPoint(entry);
         Value *hasAnyFreeVars = builder.getFalse();
-        //Value *hasAnyFreeVars = builder.CreateICmpUGE(
+        // Value *hasAnyFreeVars = builder.CreateICmpUGE(
         //    nFreeVars, builder.getInt64(1), "has_any_free_vars");
         builder.CreateCondBr(hasAnyFreeVars, free_push_loop_header,
                              free_push_loop_exit);
@@ -545,7 +558,7 @@ class BuildCtx {
 #ifdef TRAP
         // Function *trap = getOrCreateFunction(
         //    m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
-        //builder.CreateCall(trap, {});
+        // builder.CreateCall(trap, {});
 #endif
         builder.CreateCondBr(shouldLoop, free_push_loop_header,
                              free_push_loop_exit);
@@ -761,7 +774,7 @@ Function *materializeCaseConstructorAlts(const ExpressionCase *c, Module &m,
                                          StgIRBuilder &builder,
                                          BuildCtx &bctx) {
     const Identifier scrutinee = cast<AtomIdent>(c->getScrutinee())->getIdent();
-    Function *f = getOrCreateFunction(
+    Function *f = createNewFunction(
         m, FunctionType::get(builder.getVoidTy(), {}, /*isVarArg=*/false),
         "case_alt_" + scrutinee);
     BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", f);
@@ -936,7 +949,8 @@ Function *_materializeDynamicLetBinding(const Binding *b, Module &m,
     Value *closureAddr =
         builder.CreateLoad(bctx.enteringClosureAddr, "closure_addr_int");
     Value *closure = builder.CreateIntToPtr(
-        closureAddr, bctx.ClosureTy[b->getRhs()->free_params_size()]->getPointerTo(),
+        closureAddr,
+        bctx.ClosureTy[b->getRhs()->free_params_size()]->getPointerTo(),
         "closure_typed");
     int i = 0;
     BuildCtx::Scoper s(bctx);
