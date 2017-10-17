@@ -5,10 +5,10 @@ data Int2Ty = Int2Cons (PrimInt PrimInt);
 
 binding i = \() -> Int2Ty { Int2Cons (2 3) };
 
-binding swap = \(x:Int2Ty) -> Int2Ty { case x of
+binding swap = \(x_swap:Int2Ty) -> Int2Ty { case x_swap of
     Int2Cons (x y) -> Int2Cons (y x); };
 
-binding extractIntWrapped = \(x:Int2Ty) -> PrinInt { case x of
+binding extractIntWrapped = \(x_int_wrapped:Int2Ty) -> PrinInt { case x_int_wrapped of
     Int2Cons (x y) -> x (); 
 };
 
