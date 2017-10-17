@@ -47,11 +47,11 @@ int compile_program(stg::Program *p, int argc, char **argv);
                     yylval.atom= new AtomInt(atoi(yytext));
                     return ATOMINT;
                  }
-[a-z][a-zA-Z0-9]*     {
+[a-z_][a-zA-Z0-9_]*     {
                     yylval.atom = new AtomIdent(yytext);
                     return ATOMSTRING;
                  }
-[A-Z][a-zA-Z0-9]*     {
+[A-Z][a-zA-Z0-9_]*     {
                     yylval.constructorName = new std::string(yytext);
                     return CONSTRUCTORNAME;
                  }
