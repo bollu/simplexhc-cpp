@@ -1,0 +1,10 @@
+# RUN: ./compile-and-run-program.sh %s | FileCheck %s
+# CHECK: 3
+
+data Int  = Int (PrimInt);
+binding main = \() -> Void { 
+    let 
+        binding three = \() -> Int { Int (3) };
+    in case three of
+      Int ( x ) -> printInt (x); 
+};
