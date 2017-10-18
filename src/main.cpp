@@ -650,15 +650,13 @@ void materializeAp(const ExpressionAp *ap, Module &m, StgIRBuilder &builder,
 void materializeConstructor(const ExpressionConstructor *c, Module &m,
                             StgIRBuilder &builder, BuildCtx &bctx) {
     // TODO: refactor this to use DataLayout.
-    int TotalSize = 8;  // for the tag.
-    for (Atom *___ : c->args_range()) {
-        // cast<AtomInt>(a);
-        TotalSize += 4;  // bytes.
-    }
     DataConstructor *cons;
     Type *structType;
 
     std::tie(cons, structType) = bctx.getDataConstructorFromName(c->getName());
+
+    const int TotalSize = m.getDataLayout().getTypeAllocSize(structType);  // for the tag.
+
     Value *rawMem = builder.CreateCall(bctx.malloc,
                                        {builder.getInt64(TotalSize)}, "rawmem");
     Value *typedMem =
