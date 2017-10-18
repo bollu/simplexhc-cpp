@@ -796,7 +796,11 @@ Function *materializeCaseConstructorAlts(const ExpressionCase *c, Module &m,
 
     BasicBlock *failure = BasicBlock::Create(m.getContext(), "failure", f);
     builder.SetInsertPoint(failure);
-    builder.CreateUnreachable();
+    Function *trap = getOrCreateFunction(
+       m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
+    builder.CreateCall(trap, {});
+    builder.CreateRetVoid();
+    // builder.CreateUnreachable();
 
     builder.SetInsertPoint(entry);
     SwitchInst *switch_ =
