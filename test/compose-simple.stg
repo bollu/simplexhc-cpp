@@ -1,0 +1,27 @@
+# RUN: ./compile-and-run-program.sh %s | FileCheck %s
+# CHECK: 2
+
+data IntTy = IntCons (PrimInt);
+
+binding intcons = \() -> IntTy { IntCons (2) };
+
+binding id = \(idxparam: IntTy) -> IntTy {     case idxparam of
+        IntCons (x) -> IntCons (x);
+};
+
+binding extractIntWrapped = \(int_wrapped:IntTy) -> PrimInt { case int_wrapped of
+        IntCons (x) -> x (); 
+};
+
+binding compose = \(f:F g:F x:X) -> F {
+    let 
+        binding gx = \(g:F x:X) () -> F { g (x) };
+    in f (gx)
+};
+
+binding pullapart = \() -> IntTy { compose (id id intcons) };
+
+binding main = \() -> Void { 
+    case pullapart of
+        IntCons (x) -> printInt (x);
+};

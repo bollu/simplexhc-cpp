@@ -2,14 +2,16 @@
 # CHECK: 3
 
 data Int2Ty = Int2Cons (PrimInt PrimInt);
+data IntTy = IntCons (PrimInt);
 
-binding i = \() -> Int2Ty { Int2Cons (2 3) };
+binding int_2_cons = \() -> Int2Ty { Int2Cons (2 3) };
 
 binding swap = \(x_swap:Int2Ty) -> Int2Ty { case x_swap of
     Int2Cons (x y) -> Int2Cons (y x); };
 
-binding extractIntWrapped = \(x_int_wrapped:Int2Ty) -> PrinInt { case x_int_wrapped of
-    Int2Cons (x y) -> x (); 
+binding extractIntWrapped = \(x_int_wrapped:Int2Ty) -> PrimInt { 
+    case x_int_wrapped of
+        Int2Cons (x y) -> IntCons (x); 
 };
 
 binding compose = \(f:F g:F x:X) -> F { 
@@ -18,9 +20,9 @@ binding compose = \(f:F g:F x:X) -> F {
     in f (gx)
 };
 
-binding pullapart = \() -> PrimInt { compose (extractIntWrapped swap i) };
+binding pullapart = \() -> PrimInt { compose (extractIntWrapped swap int_2_cons) };
 
 binding main = \() -> Void { 
     case pullapart of
-        default -> printInt ();
+        IntCons(x) -> printInt (x);
 };
