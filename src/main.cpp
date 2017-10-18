@@ -717,6 +717,7 @@ void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
 
     // Declaration and destructuring param sizes should match.
     assert(cons->types_size() == d->variables_size());
+
     for (Identifier var : d->variables_range()) {
         // We need i+1 because 0th slot is used for type.
         SmallVector<Value *, 2> Idxs = {builder.getInt64(0),
@@ -727,7 +728,9 @@ void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
         if (*cons->getTypeName(i) == "PrimInt") {
             bctx.insertIdentifier(var, V);
         } else {
-            assert(false && "umimplemented destructuring for non int types");
+          bctx.insertIdentifier(var, V);
+          errs() << __PRETTY_FUNCTION__ << ":" << __LINE__ << " inserted value corresponding to int as an expr\n";
+          //assert(false && "umimplemented destructuring for non int types");
         }
         i++;
     }
