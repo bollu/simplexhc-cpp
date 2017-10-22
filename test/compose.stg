@@ -14,15 +14,15 @@ binding extractIntWrapped = \(x_int_wrapped:Int2Ty) -> PrimInt {
         Int2Cons (x y) -> IntCons (x); 
 };
 
-binding compose = \(f:F g:F x:X) -> F { 
+binding compose = \(f:Boxed g:Boxed x:Boxed) -> Boxed { 
     let 
-        binding gx = \(g:F x:X) () -> F { g (x) };
+        binding gx = \(g:Boxed x:Boxed) () -> Boxed { g (x) };
     in f (gx)
 };
 
 binding pullapart = \() -> PrimInt { compose (extractIntWrapped swap int_2_cons) };
 
-binding main = \() -> Void { 
+binding main = \() -> Boxed { 
     case pullapart of
         IntCons(x) -> printInt (x);
 };

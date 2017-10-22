@@ -47,7 +47,7 @@ class DataConstructor {
     const_iterator types_begin() const { return types.begin(); }
     const_iterator types_end() const { return types.end(); }
 
-    const TypeName *getTypeName(size_t i) const { return types[i]; }
+    const TypeName getTypeName(size_t i) const { return *types[i]; }
 
     iterator_range<iterator> types_range() {
         return make_range<iterator>(types_begin(), types_end());
@@ -111,6 +111,11 @@ class DataType {
 
         report_fatal_error(
             "unknown data constructor variant asked for data declaration");
+    }
+
+
+    static DataType *createPrimIntTy() {
+        return new DataType("PrimInt", {});
     }
 };
 
@@ -413,7 +418,7 @@ class Parameter {
     void print(std::ostream &os) const;
     friend std::ostream &operator<<(std::ostream &os, const Parameter &p);
 
-    TypeName getType() const { return type; }
+    TypeName getTypeName() const { return type; }
     Identifier getName() const { return name; }
 };
 
@@ -476,6 +481,10 @@ class Lambda {
 
     iterator_range<const_reverse_iterator> free_params_reverse_range() const {
         return make_range(free_params_end(), free_params_begin());
+    }
+
+    std::string getReturnTypeName() const {
+        return this->returnType;
     }
 };
 

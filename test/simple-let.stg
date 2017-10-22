@@ -2,7 +2,7 @@
 # CHECK: 3
 
 data Int  = Int (PrimInt);
-binding main = \() -> Void { 
+binding main = \() -> Boxed { 
     let 
         binding three = \() -> Int { Int (3) };
     in case three of

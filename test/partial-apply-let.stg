@@ -3,13 +3,13 @@
 
 data IntT  = IntCons (PrimInt);
 
-binding one = \() -> A { IntCons (1) };
-binding two = \() -> A { IntCons (2) };
+binding one = \() -> Boxed { IntCons (1) };
+binding two = \() -> Boxed { IntCons (2) };
 
-binding k = \(x:A y:A) -> A { x () };
-binding main = \() -> Void { let 
-                                binding k1 = \() -> A { k (one) };
-                                binding k12 = \(k1: F) () -> A { k1 (two) };
+binding k = \(x:Boxed y:Boxed) -> Boxed { x () };
+binding main = \() -> Boxed { let 
+                                binding k1 = \() -> Boxed { k (one) };
+                                binding k12 = \(k1: Boxed) () -> Boxed { k1 (two) };
                              in case k12 of
                                     IntCons (x) -> printInt (x);
                            };

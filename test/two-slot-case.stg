@@ -3,6 +3,6 @@
 
 data Int = Int2(PrimInt PrimInt);
 binding three = \() -> Int { Int2 (5 2) };
-binding main = \() -> Void { case three of
+binding main = \() -> Boxed { case three of
                                 Int2(x y) -> printInt (y);
                             };

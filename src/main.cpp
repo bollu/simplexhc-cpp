@@ -40,6 +40,17 @@ struct LLVMClosureData {
     LLVMClosureData(Function *fn, GlobalVariable *closure)
         : fn(fn), closure(closure){};
 };
+
+struct LLVMValueData {
+    AssertingVH<Value> v;
+    DataType *stgtype;
+
+    LLVMValueData(Value *v, DataType *stgtype) : v(v), stgtype(stgtype) {}
+    static LLVMValueData createPrimInt(Value *v) {
+        return LLVMValueData(v, DataType::createPrimIntTy());
+    };
+};
+
 LLVMClosureData materializeTopLevelStaticBinding(const Binding *b, Module &m,
                                                  StgIRBuilder &builder,
                                                  BuildCtx &bctx);
@@ -64,7 +75,7 @@ static AssertingVH<Function> getOrCreateFunction(Module &m, FunctionType *FTy,
 }
 
 static AssertingVH<Function> createNewFunction(Module &m, FunctionType *FTy,
-                                            std::string name) {
+                                               std::string name) {
     Function *F = m.getFunction(name);
     if (F) {
         errs() << "Function with name:(" << name << ") already exists:\n";
@@ -131,7 +142,7 @@ class Scope {
             inner.getValue()->insert(k, v);
         else {
             assert(m.find(k) == m.end());
-            m[k] = v;
+            m.insert(std::make_pair(k,v));
         }
     }
 
@@ -209,7 +220,7 @@ static const int STACK_SIZE = 5000;
 static const int HEAP_SIZE = 5000;
 class BuildCtx {
    public:
-    using IdentifierMapTy = Scope<Identifier, AssertingVH<Value>>;
+    using IdentifierMapTy = Scope<Identifier, LLVMValueData>;
 
     using StaticBindingMapTy = std::map<Identifier, LLVMClosureData>;
 
@@ -295,9 +306,9 @@ class BuildCtx {
         printInt = [&] {
             Function *F =
                 createNewFunction(m,
-                                    FunctionType::get(builder.getVoidTy(),
-                                                      /*isVarArg=*/false),
-                                    "printInt");
+                                  FunctionType::get(builder.getVoidTy(),
+                                                    /*isVarArg=*/false),
+                                  "printInt");
             return new LLVMClosureData(materializeStaticClosureForFn(
                 F, "closure_printInt", m, builder, *this));
         }();
@@ -316,32 +327,30 @@ class BuildCtx {
     }
 
     // map a binding to a function in the given scope.
-    void insertBinding(Binding *b, LLVMClosureData bdata) {
+    void insertTopLevelBinding(Binding *b, LLVMClosureData bdata) {
         assert(staticBindingMap.find(b->getName()) == staticBindingMap.end());
         // assert(false);
         staticBindingMap.insert(std::make_pair(b->getName(), bdata));
 
-        identifiermap.insert(b->getName(), &*bdata.closure);
+        DataType *returnTy = this->getDataTypeFromName(b->getRhs()->getReturnTypeName());
+        LLVMValueData vdata(&*bdata.closure, returnTy);
+        identifiermap.insert(b->getName(), vdata);
     }
 
     // map an identifier to a value in the current scope.
-    void insertIdentifier(Identifier ident, Value *v) {
+    void insertIdentifier(Identifier ident, LLVMValueData v) {
         identifiermap.insert(ident, v);
     }
 
-    // replace an identifier that is known to exist. asserts that
-    void replaceIdentifier(Identifier ident, Value *v) {
-        identifiermap.replace(ident, v);
-    }
     // lookup an identifier form the current scope
-    AssertingVH<Value> getIdentifier(Identifier ident) {
+    LLVMValueData  getIdentifier(Identifier ident) {
         auto It = identifiermap.find(ident);
         if (It == identifiermap.end()) {
             cerr << "Unknown identifier: " << ident << "\n";
             identifiermap.dump([&](const Identifier &id,
-                                   const AssertingVH<Value> &v,
+                                   const LLVMValueData &vdata,
                                    unsigned nesting) {
-                errs() << id << " => " << *v << "\n";
+                errs() << id << " => " << *vdata.v << "\n";
             });
             assert(false && "unable to find identifier");
         }
@@ -380,7 +389,7 @@ class BuildCtx {
         dataTypeMap[name] = datatype;
     }
 
-    DataType *getDataTypeName(std::string name) const {
+    DataType *getDataTypeFromName(std::string name) const {
         auto It = dataTypeMap.find(name);
         if (It == dataTypeMap.end()) {
             errs() << "unknown name: " << name << "\n";
@@ -415,11 +424,17 @@ class BuildCtx {
     static void populateIntrinsicTypes(Module &m, StgIRBuilder &builder,
                                        DataTypeMap &typemap,
                                        DataConstructorMap &consmap) {
+        // primInt
         DataConstructor *cons = new DataConstructor("PrimInt", {});
         consmap["PrimInt"] = std::make_pair(cons, builder.getInt64Ty());
 
         DataType *primIntTy = new DataType("PrimInt", {cons});
         typemap["PrimInt"] = primIntTy;
+
+
+        // Boxed
+        DataType *voidTy = new DataType("Boxed", {}); // void has no constructors.
+        typemap["Boxed"] = voidTy;
     }
 
     static void addStack(Module &m, StgIRBuilder &builder, Type *elemTy,
@@ -432,9 +447,9 @@ class BuildCtx {
             m, FunctionType::get(elemTy, /*isVarArg=*/false), "pop" + name);
         pushFn =
             createNewFunction(m,
-                                FunctionType::get(builder.getVoidTy(), {elemTy},
-                                                  /*isVarArg=*/false),
-                                "push" + name);
+                              FunctionType::get(builder.getVoidTy(), {elemTy},
+                                                /*isVarArg=*/false),
+                              "push" + name);
         Type *stackTy = ArrayType::get(elemTy, size);
         // Constant *Init = ConstantAggregateZero::get(stackTy);
         stack = new GlobalVariable(
@@ -590,7 +605,7 @@ Value *materializeAtomInt(const AtomInt *i, StgIRBuilder &builder,
 
 Value *materializeAtomIdent(const AtomIdent *id, StgIRBuilder &builder,
                             BuildCtx &bctx) {
-    return bctx.getIdentifier(id->getIdent());
+    return bctx.getIdentifier(id->getIdent()).v;
     assert(false && "umimplemented materialization of identifier atom");
 }
 
@@ -642,7 +657,7 @@ void materializeAp(const ExpressionAp *ap, Module &m, StgIRBuilder &builder,
     if (Cls) {
         materializeEnterStaticClosure(*Cls, m, builder, bctx);
     } else {
-        Value *V = bctx.getIdentifier(ap->getFnName());
+        Value *V = bctx.getIdentifier(ap->getFnName()).v;
         materializeEnterDynamicClosure(V, m, builder, bctx);
     }
 };
@@ -655,7 +670,8 @@ void materializeConstructor(const ExpressionConstructor *c, Module &m,
 
     std::tie(cons, structType) = bctx.getDataConstructorFromName(c->getName());
 
-    const int TotalSize = m.getDataLayout().getTypeAllocSize(structType);  // for the tag.
+    const int TotalSize =
+        m.getDataLayout().getTypeAllocSize(structType);  // for the tag.
 
     Value *rawMem = builder.CreateCall(bctx.malloc,
                                        {builder.getInt64(TotalSize)}, "rawmem");
@@ -725,12 +741,14 @@ void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
         Value *Slot =
             builder.CreateGEP(StructPtr, Idxs, "slot_int_" + std::to_string(i));
         Value *V = builder.CreateLoad(Slot, "arg_int_" + std::to_string(i));
-        if (*cons->getTypeName(i) == "PrimInt") {
-            bctx.insertIdentifier(var, V);
+        if (cons->getTypeName(i) == "PrimInt") {
+            bctx.insertIdentifier(var, LLVMValueData::createPrimInt(V));
         } else {
-          bctx.insertIdentifier(var, V);
-          errs() << __PRETTY_FUNCTION__ << ":" << __LINE__ << " inserted value corresponding to int as an expr\n";
-          //assert(false && "umimplemented destructuring for non int types");
+            DataType *Ty = bctx.getDataTypeFromName(cons->getTypeName(i));
+            bctx.insertIdentifier(var, LLVMValueData(V, Ty));
+            errs() << __PRETTY_FUNCTION__ << ":" << __LINE__
+                   << " inserted value corresponding to int as an expr\n";
+            // assert(false && "umimplemented destructuring for non int types");
         }
         i++;
     }
@@ -800,7 +818,7 @@ Function *materializeCaseConstructorAlts(const ExpressionCase *c, Module &m,
     BasicBlock *failure = BasicBlock::Create(m.getContext(), "failure", f);
     builder.SetInsertPoint(failure);
     Function *trap = getOrCreateFunction(
-       m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
+        m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
     builder.CreateCall(trap, {});
     builder.CreateRetVoid();
     // builder.CreateUnreachable();
@@ -867,7 +885,7 @@ void materializeCaseConstructor(const ExpressionCase *c, Module &m,
     if (NextCls)
         materializeEnterStaticClosure(*NextCls, m, builder, bctx);
     else {
-        Value *V = bctx.getIdentifier(scrutineeName);
+        Value *V = bctx.getIdentifier(scrutineeName).v;
         materializeEnterDynamicClosure(V, m, builder, bctx);
     }
     // CreateTailCall(builder, Next, {});
@@ -965,7 +983,8 @@ Function *_materializeDynamicLetBinding(const Binding *b, Module &m,
             {builder.getInt64(0), builder.getInt32(2), builder.getInt32(i)},
             p->getName() + "slot");
         v = builder.CreateLoad(v, p->getName());
-        bctx.insertIdentifier(p->getName(), v);
+        DataType *ty = bctx.getDataTypeFromName(p->getTypeName());
+        bctx.insertIdentifier(p->getName(), LLVMValueData(v, ty));
         // builder.createGEP(bctx.enter
         i++;
     }
@@ -987,12 +1006,16 @@ void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
     for (Binding *b : l->bindings_range()) {
         Value *cls =
             _allocateLetBindingDynamicClosure(b, Entry, m, builder, bctx);
-        bctx.insertIdentifier(b->getName(), cls);
+        DataType *Ty = bctx.getDataTypeFromName(b->getRhs()->getReturnTypeName());
+        // So, because function applications are _fully saturated_, I can consider
+        // the type of a let-binding to be the return type. Is this cheating? Sure.
+        assert(true && "what type do I assign to a let-binding?");
+        bctx.insertIdentifier(b->getName(), LLVMValueData(cls, Ty));
     }
 
     for (Binding *b : l->bindings_range()) {
         Function *f = _materializeDynamicLetBinding(b, m, builder, bctx);
-        Value *cls = bctx.getIdentifier(b->getName());
+        Value *cls = bctx.getIdentifier(b->getName()).v;
         // store this in the closure slot.
         Value *fnSlot =
             builder.CreateGEP(cls, {builder.getInt64(0), builder.getInt32(1)},
@@ -1005,7 +1028,7 @@ void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
                 cls,
                 {builder.getInt64(0), builder.getInt32(2), builder.getInt32(i)},
                 b->getName() + "_free_param_" + p->getName() + "_slot");
-            Value *v = bctx.getIdentifier(p->getName());
+            Value *v = bctx.getIdentifier(p->getName()).v;
             v = TransmuteToInt(v, builder);
             builder.CreateStore(v, freeParamSlot);
             i++;
@@ -1044,12 +1067,13 @@ void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
                        BuildCtx &bctx) {
     BuildCtx::Scoper scoper(bctx);
     for (const Parameter *p : l->bound_params_range()) {
-        if (p->getType() == "PrimInt") {
+        if (p->getTypeName() == "PrimInt") {
             assert(false && "unhandled, functions taking prim ints as params");
         } else {
             Value *pv =
                 builder.CreateCall(bctx.popInt, {}, "param_" + p->getName());
-            bctx.insertIdentifier(p->getName(), pv);
+            DataType *Ty = bctx.getDataTypeFromName(p->getTypeName());
+            bctx.insertIdentifier(p->getName(), LLVMValueData(pv, Ty));
         }
     }
     materializeExpr(l->getRhs(), m, builder, bctx);
@@ -1108,7 +1132,7 @@ StructType *materializeDataConstructor(const DataType *decl,
     for (TypeName *____ : b->types_range()) {
         // HACK:
         Elements.push_back(builder.getInt64Ty());
-        // Elements.push_back(bctx.getDataTypeName(*Name));
+        // Elements.push_back(bctx.getDataTypeFromName(*Name));
     }
 
     StructType *Ty =
@@ -1144,7 +1168,7 @@ int compile_program(stg::Program *program, int argc, char **argv) {
             entrystg = b;
         }
 
-        bctx.insertBinding(
+        bctx.insertTopLevelBinding(
             b, materializeTopLevelStaticBinding(b, *m, builder, bctx));
     }
 
