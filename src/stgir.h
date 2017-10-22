@@ -315,6 +315,11 @@ class CaseAltInt : public CaseAlt {
     static bool classof(const CaseAlt *a) {
         return a->getKind() == CaseAlt::CAK_Int;
     }
+
+    int getLHS() const {
+        return lhs->getVal();
+    }
+
     void print(std::ostream &os) const;
 };
 
@@ -327,6 +332,7 @@ class CaseAltVariable : public CaseAlt {
     static bool classof(const CaseAlt *a) {
         return a->getKind() == CaseAlt::CAK_Variable;
     }
+    Identifier getLHS() const { return lhs; }
     void print(std::ostream &os) const;
 };
 
@@ -387,6 +393,27 @@ class ExpressionCase : public Expression {
         for (CaseAlt *alt : altsref) {
             alts.push_back(alt);
         }
+
+        bool hasDefaultAlt = false;
+        for (const CaseAlt *alt : this->alts) {
+            if (isa<CaseAltDefault>(alt)) {
+                assert(!hasDefaultAlt && "Case expression has multiple default alts!");
+                hasDefaultAlt = true;
+            }
+        }
+
+        bool hasVariableAlt = false;
+        for (const CaseAlt *alt : this->alts) {
+            if (isa<CaseAltVariable>(alt)) {
+                assert(!hasVariableAlt && "Case expression has multiple variable alts!");
+                hasVariableAlt = true;
+            }
+        }
+
+        if (hasDefaultAlt && hasVariableAlt) {
+            assert(false && "case has *both* default *and* variable alt, cannot compile!");
+        }
+
     }
 
     void print(std::ostream &os) const;
@@ -405,6 +432,24 @@ class ExpressionCase : public Expression {
 
     iterator_range<const_iterator> alts_range() const {
         return make_range(alts_begin(), alts_end());
+    }
+
+    const CaseAltDefault *getDefaultAlt()  const {
+        for (const CaseAlt* alt : this->alts) {
+            if (const CaseAltDefault *d = dyn_cast<CaseAltDefault>(alt)) {
+                return d;
+            }
+        }
+        return nullptr;
+    }
+
+    const CaseAltVariable *getVariableAlt()  const {
+        for (const CaseAlt* alt : this->alts) {
+            if (const CaseAltVariable *v = dyn_cast<CaseAltVariable>(alt)) {
+                return v;
+            }
+        }
+        return nullptr;
     }
 };
 

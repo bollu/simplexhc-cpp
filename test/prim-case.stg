@@ -1,0 +1,7 @@
+# RUN: ./compile-and-run-program.sh %s | FileCheck %s
+# CHECK: 4
+
+binding main = \() -> Boxed {
+    case 4 of
+        x -> printInt (x);
+};

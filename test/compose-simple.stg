@@ -5,7 +5,8 @@ data IntTy = IntCons (PrimInt);
 
 binding intcons = \() -> IntTy { IntCons (2) };
 
-binding id = \(idxparam: IntTy) -> IntTy {     case idxparam of
+binding id = \(idxparam: IntTy) -> IntTy {     
+    case idxparam of
         IntCons (x) -> IntCons (x);
 };
 
