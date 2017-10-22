@@ -1,0 +1,19 @@
+# RUN: ./compile-and-run-program.sh %s | FileCheck %s
+# CHECK: 2
+
+data IntTy = IntCons (IntWrappedTy);
+data IntWrappedTy = IntWrappedCons (IntTy);
+
+binding two = \() -> IntTy { IntCons (2) };
+binding twowrapped = \() -> IntWrappedTy { IntWrappedCons (two) };
+
+binding processint = \(int: IntTy) -> Boxed {
+    case int of
+        IntCons (x) -> printInt (x);
+};
+
+
+binding main = \() -> Boxed {
+    case twowrapped of
+        IntWrappedCons (x) -> processint (x);
+};
