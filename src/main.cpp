@@ -1,4 +1,6 @@
 #include <iostream>
+#include <set>
+#include <sstream>
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -15,7 +17,6 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/FileSystem.h"
 #include "stgir.h"
-#include <sstream>
 
 using namespace std;
 using namespace stg;
@@ -57,7 +58,6 @@ void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
 LLVMClosureData materializeStaticClosureForFn(Function *F, std::string name,
                                               Module &m, StgIRBuilder &builder,
                                               BuildCtx &bctx);
-
 
 // http://web.iitd.ac.in/~sumeet/flex__bison.pdf
 // http://aquamentus.com/flex_bison.html
@@ -313,7 +313,8 @@ class BuildCtx {
                 F, "closure_printInt", m, builder, *this));
         }();
         this->staticBindingMap.insert(std::make_pair("printInt", *printInt));
-        this->identifiermap.insert("printInt", LLVMValueData(printInt->closure, this->boxedTy));
+        this->identifiermap.insert(
+            "printInt", LLVMValueData(printInt->closure, this->boxedTy));
 
         // *** primMultiply *** //
         createPrimFunction(m, builder, *this, "primMultiply", this->primIntTy,
@@ -349,6 +350,10 @@ class BuildCtx {
         identifiermap.insert(b->getName(), vdata);
     }
 
+    iterator_range<StaticBindingMapTy::const_iterator> getTopLevelBindings() const {
+        return make_range(staticBindingMap.begin(), staticBindingMap.end());
+    }
+
     // map an identifier to a value in the current scope.
     void insertIdentifier(Identifier ident, LLVMValueData v) {
         identifiermap.insert(ident, v);
@@ -371,7 +376,7 @@ class BuildCtx {
     }
 
     Optional<LLVMClosureData> getTopLevelBindingFromName(
-            std::string name) const {
+        std::string name) const {
         auto It = staticBindingMap.find(name);
         if (It == staticBindingMap.end()) {
             return None;
@@ -543,10 +548,14 @@ class BuildCtx {
         Argument *closureAddr = &*F->arg_begin();
         closureAddr->setName("closure_addr");
 
-        Value *closureStruct = builder.CreateIntToPtr(closureAddr, bctx.ClosureTy[0]->getPointerTo());
-        Value *contSlot = builder.CreateGEP(closureStruct, {builder.getInt64(0), builder.getInt32(0)}, "cont_slot");
+        Value *closureStruct = builder.CreateIntToPtr(
+            closureAddr, bctx.ClosureTy[0]->getPointerTo());
+        Value *contSlot = builder.CreateGEP(
+            closureStruct, {builder.getInt64(0), builder.getInt32(0)},
+            "cont_slot");
         Value *cont = builder.CreateLoad(contSlot, "cont");
-        // Value *contAddr = builder.CreatePtrToInt(cont, builder.getInt64Ty(), "cont_addr");
+        // Value *contAddr = builder.CreatePtrToInt(cont, builder.getInt64Ty(),
+        // "cont_addr");
 
         // store the address of the closure we are entering
         builder.CreateStore(closureAddr, bctx.enteringClosureAddr);
@@ -556,22 +565,20 @@ class BuildCtx {
         return F;
     }
 
-    LLVMClosureData
-    createPrimFunction(Module &m, StgIRBuilder &builder, const BuildCtx &bctx,
-                       std::string fnName,
-                       DataType *returnType,
-                       BuildCtx::StaticBindingMapTy &staticBindingMap,
-                       BuildCtx::IdentifierMapTy &identifiermap) {
-      Function *F = createNewFunction(m,
-                                      FunctionType::get(builder.getVoidTy(),
-                                                        /*isVarArg=*/false),
-                                      fnName);
-      LLVMClosureData data(materializeStaticClosureForFn(
-          F, "closure_" + fnName, m, builder, *this));
-      staticBindingMap.insert(std::make_pair(fnName, data));
-      identifiermap.insert(fnName, LLVMValueData(data.closure, returnType));
-      return data;
-
+    LLVMClosureData createPrimFunction(
+        Module &m, StgIRBuilder &builder, const BuildCtx &bctx,
+        std::string fnName, DataType *returnType,
+        BuildCtx::StaticBindingMapTy &staticBindingMap,
+        BuildCtx::IdentifierMapTy &identifiermap) {
+        Function *F = createNewFunction(m,
+                                        FunctionType::get(builder.getVoidTy(),
+                                                          /*isVarArg=*/false),
+                                        fnName);
+        LLVMClosureData data(materializeStaticClosureForFn(
+            F, "closure_" + fnName, m, builder, *this));
+        staticBindingMap.insert(std::make_pair(fnName, data));
+        identifiermap.insert(fnName, LLVMValueData(data.closure, returnType));
+        return data;
     }
 };
 
@@ -750,10 +757,10 @@ static const DataType *getCommonDataTypeFromAlts(const ExpressionCase *c,
 
 // materialize alternate handling of case `ident` of ...)
 Function *materializeCaseConstructorReturnFrame(const ExpressionCase *c,
-                                                Module &m,
-                                                StgIRBuilder builder,
+                                                Module &m, StgIRBuilder builder,
                                                 BuildCtx &bctx) {
-    //const Identifier scrutinee = cast<AtomIdent>(c->getScrutinee())->getIdent();
+    // const Identifier scrutinee =
+    // cast<AtomIdent>(c->getScrutinee())->getIdent();
     std::stringstream scrutineeNameSS;
     scrutineeNameSS << *c->getScrutinee();
     Function *f = createNewFunction(
@@ -823,22 +830,22 @@ Function *materializeCaseConstructorReturnFrame(const ExpressionCase *c,
 }
 
 // Materialize a case over Prim int.
-Function *materializePrimitiveCaseReturnFrame(const ExpressionCase *c, Module &m,
-                                         StgIRBuilder builder,
-                                         BuildCtx &bctx) {
+Function *materializePrimitiveCaseReturnFrame(const ExpressionCase *c,
+                                              Module &m, StgIRBuilder builder,
+                                              BuildCtx &bctx) {
     std::stringstream namess;
     namess << *c->getScrutinee();
 
-    Function *F = createNewFunction(m, FunctionType::get(builder.getVoidTy(),
-                                                         {}, /*isVarArg=*/false),
-                                                         namess.str());
+    Function *F = createNewFunction(
+        m, FunctionType::get(builder.getVoidTy(), {}, /*isVarArg=*/false),
+        namess.str());
     BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
     builder.SetInsertPoint(entry);
 
     Value *scrutinee = builder.CreateCall(bctx.popInt, {}, "scrutinee");
-    BasicBlock *defaultBB = BasicBlock::Create(m.getContext(), "alt_default", F);
+    BasicBlock *defaultBB =
+        BasicBlock::Create(m.getContext(), "alt_default", F);
     SwitchInst *switchInst = builder.CreateSwitch(scrutinee, defaultBB);
-
 
     ExpressionCase::const_iterator it = c->alts_begin();
     int i = 0;
@@ -865,14 +872,13 @@ Function *materializePrimitiveCaseReturnFrame(const ExpressionCase *c, Module &m
                 // insert code for expression in the new BB.
                 builder.SetInsertPoint(BB);
                 materializeExpr(ci->getRHS(), m, builder, bctx);
-                //create ret void.
+                // create ret void.
                 builder.SetInsertPoint(BB);
-               // builder.CreateRetVoid();
+                // builder.CreateRetVoid();
                 break;
             }
         }
     }
-
 
     // we care about the default case
     if (const CaseAltDefault *cd = c->getDefaultAlt()) {
@@ -880,25 +886,25 @@ Function *materializePrimitiveCaseReturnFrame(const ExpressionCase *c, Module &m
         // push the scrutinee back because this is the "default" version.
         builder.CreateCall(bctx.pushInt, {scrutinee});
         materializeExpr(cd->getRHS(), m, builder, bctx);
-        //create ret void.
+        // create ret void.
         builder.SetInsertPoint(defaultBB);
 
         assert(false && "unhandled default");
-    }
-    else if (const CaseAltVariable *cv = c->getVariableAlt()) {
+    } else if (const CaseAltVariable *cv = c->getVariableAlt()) {
         defaultBB->setName("var_" + cv->getLHS());
         BuildCtx::Scoper s(bctx);
         builder.SetInsertPoint(defaultBB);
-        // create a binding between the scrutinee and the variable name of the alt.
-        bctx.insertIdentifier(cv->getLHS(), LLVMValueData::createPrimInt(scrutinee));
+        // create a binding between the scrutinee and the variable name of the
+        // alt.
+        bctx.insertIdentifier(cv->getLHS(),
+                              LLVMValueData::createPrimInt(scrutinee));
         materializeExpr(cv->getRHS(), m, builder, bctx);
-        //create ret void.
+        // create ret void.
 
-    }
-    else {
+    } else {
         builder.SetInsertPoint(defaultBB);
         Function *trap = getOrCreateFunction(
-                m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
+            m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
         builder.CreateCall(trap, {});
     }
 
@@ -906,43 +912,136 @@ Function *materializePrimitiveCaseReturnFrame(const ExpressionCase *c, Module &m
 }
 
 static const DataType *getTypeOfExpression(const Expression *e,
-                                     const BuildCtx &bctx) {
-  switch (e->getKind()) {
-  case Expression::EK_Ap: {
-    const ExpressionAp *ap = cast<ExpressionAp>(e);
-    const std::string fnName = ap->getFnName();
-    return bctx.getDataTypeFromName(fnName);
-    break;
-  }
-  case Expression::EK_IntLiteral: {
-    return bctx.getPrimIntTy();
-    break;
-  }
-  case Expression::EK_Case:
-  case Expression::EK_Cons:
-  case Expression::EK_Let:
-    assert(false && "unimplemented getTypeOfExpression");
-  }
+                                           const BuildCtx &bctx) {
+    switch (e->getKind()) {
+        case Expression::EK_Ap: {
+            const ExpressionAp *ap = cast<ExpressionAp>(e);
+            const std::string fnName = ap->getFnName();
+            return bctx.getDataTypeFromName(fnName);
+            break;
+        }
+        case Expression::EK_IntLiteral: {
+            return bctx.getPrimIntTy();
+            break;
+        }
+        case Expression::EK_Case:
+        case Expression::EK_Cons:
+        case Expression::EK_Let:
+            assert(false && "unimplemented getTypeOfExpression");
+    }
+}
+
+// Get all identifiers reffered to by this expression, whether free or bound.
+std::set<Identifier> getIdentifiersInExpression(const Expression *e) {
+    auto extractIdentifierFromAtom = [](std::set<Identifier> &s,
+                                        const Atom *a) {
+        if (const AtomIdent *id = dyn_cast<AtomIdent>(a))
+            s.insert(id->getIdent());
+    };
+
+    switch (e->getKind()) {
+        case Expression::EK_IntLiteral:
+            return {};
+        case Expression::EK_Ap: {
+            std::set<Identifier> ids;
+            const ExpressionAp *ap = cast<ExpressionAp>(e);
+            ids.insert(ap->getFnName());
+            for (const Atom *p : ap->params_range())
+                extractIdentifierFromAtom(ids, p);
+            return ids;
+        }
+        case Expression::EK_Cons: {
+            std::set<Identifier> ids;
+            const ExpressionConstructor *cons = cast<ExpressionConstructor>(e);
+            for (const Atom *a : cons->args_range())
+                extractIdentifierFromAtom(ids, a);
+            return ids;
+        }
+        case Expression::EK_Let:
+        case Expression::EK_Case:
+            errs() << __PRETTY_FUNCTION__ << ":" << __LINE__
+                   << "|HACK: IGNORING ALL IDENTIFIERS IN CASE\n";
+            assert(false && "unimplemented");
+    }
+    assert(false && "unreachable");
+}
+
+// Get the names of the variables that are feshly bound by an alt
+std::set<Identifier> getBoundIdentifiersInAlt(const CaseAlt *alt) {
+    auto extractIdentfierFromAtom = [](std::set<Identifier> &s, const Atom *a) {
+        if (const AtomIdent *id = dyn_cast<AtomIdent>(a))
+            s.insert(id->getIdent());
+    };
+    switch (alt->getKind()) {
+        case CaseAlt::CAK_Default:
+            return {};
+        case CaseAlt::CAK_Variable: {
+            const CaseAltVariable *var = cast<CaseAltVariable>(alt);
+            return {var->getLHS()};
+        }
+        case CaseAlt::CAK_Int:
+            return {};
+        case CaseAlt::CAK_Destructure: {
+            std::set<Identifier> ids;
+            const CaseAltDestructure *destructure =
+                cast<CaseAltDestructure>(alt);
+            for (Identifier id : destructure->variables_range()) ids.insert(id);
+            return ids;
+        }
+    }
+    assert(false && "unreachable");
+}
+
+// Return the free variables in a `case` statement.
+std::set<Identifier> getFreeVarsInCase(const ExpressionCase *c, const BuildCtx &bctx) {
+    std::set<Identifier> free;
+    for (const CaseAlt *a : c->alts_range()) {
+        std::set<Identifier> boundLHS = getBoundIdentifiersInAlt(a);
+        std::set<Identifier> allRHS = getIdentifiersInExpression(a->getRHS());
+
+        std::set_difference(allRHS.begin(), allRHS.end(), boundLHS.begin(),
+                            boundLHS.end(), std::inserter(free, free.begin()));
+    }
+
+    // We can remove top-level bindings from this list, because they are always
+    // available, so they are "pseudo bound".
+    for (auto It : bctx.getTopLevelBindings()) {
+        free.erase(It.first);
+
+    }
+  return free;
 }
 void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
                      BuildCtx &bctx) {
+
+    assert(getFreeVarsInCase(c, bctx).size() == 0 && "have case with free variables, cannot codegen!");
+
     BasicBlock *insertBlock = builder.GetInsertBlock();
     const Expression *scrutinee = c->getScrutinee();
     const DataType *scrutineety = getTypeOfExpression(scrutinee, bctx);
     if (bctx.isPrimIntTy(scrutineety)) {
-        Function *continuation = materializePrimitiveCaseReturnFrame(c, m, builder, bctx);
-        Value *clsRaw = builder.CreateCall(bctx.malloc, {builder.getInt64(m.getDataLayout().getTypeAllocSize(bctx.ClosureTy[0]))}, "closure_raw");
-        Value *clsTyped = builder.CreateBitCast(clsRaw, bctx.ClosureTy[0]->getPointerTo(), "closure_typed");
-        Value *fnSlot = builder.CreateGEP(clsTyped, {builder.getInt64(0), builder.getInt32(0)}, "fn_slot");
+        Function *continuation =
+            materializePrimitiveCaseReturnFrame(c, m, builder, bctx);
+        Value *clsRaw = builder.CreateCall(
+            bctx.malloc,
+            {builder.getInt64(
+                m.getDataLayout().getTypeAllocSize(bctx.ClosureTy[0]))},
+            "closure_raw");
+        Value *clsTyped = builder.CreateBitCast(
+            clsRaw, bctx.ClosureTy[0]->getPointerTo(), "closure_typed");
+        Value *fnSlot = builder.CreateGEP(
+            clsTyped, {builder.getInt64(0), builder.getInt32(0)}, "fn_slot");
         builder.CreateStore(continuation, fnSlot);
-        Value *clsAsContHack = builder.CreateBitCast(clsTyped, bctx.ContTy->getPointerTo(), "closure_as_cont_omg_this_is_a_hack_change_type_of_return_stack");
+        Value *clsAsContHack = builder.CreateBitCast(
+            clsTyped, bctx.ContTy->getPointerTo(),
+            "closure_as_cont_omg_this_is_a_hack_change_type_of_return_stack");
 
         builder.CreateCall(bctx.pushReturnCont, {clsAsContHack});
         materializeExpr(scrutinee, m, builder, bctx);
         builder.CreateRetVoid();
-    }
-    else {
-        Function *continuation = materializeCaseConstructorReturnFrame(c, m, builder, bctx);
+    } else {
+        Function *continuation =
+            materializeCaseConstructorReturnFrame(c, m, builder, bctx);
         builder.CreateCall(bctx.pushReturnCont, {continuation});
         materializeExpr(scrutinee, m, builder, bctx);
     }
@@ -1074,7 +1173,6 @@ void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
         }
     }
 
-
     // Now create heap locations for these bad boys and
     // set those heap locations to be the "correct"
     // locations.
@@ -1084,7 +1182,8 @@ void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
 void materializeExprIntLiteral(const ExpressionIntLiteral *e, Module &m,
                                StgIRBuilder &builder, BuildCtx &bctx) {
     builder.CreateCall(bctx.pushInt, {builder.getInt64(e->getValue())});
-    Value *cont = builder.CreateCall(bctx.popReturnCont, {}, "return_cont_" + std::to_string(e->getValue()));
+    Value *cont = builder.CreateCall(
+        bctx.popReturnCont, {}, "return_cont_" + std::to_string(e->getValue()));
     materializeEnterDynamicClosure(cont, m, builder, bctx);
 }
 
@@ -1115,9 +1214,12 @@ void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
     BuildCtx::Scoper scoper(bctx);
     for (const Parameter *p : l->bound_params_range()) {
         if (p->getTypeName() == "PrimInt") {
-            Value *pv = builder.CreateCall(bctx.popInt, {}, "param_" + p->getName());
-            bctx.insertIdentifier(p->getName(), LLVMValueData::createPrimInt(pv));
-            // assert(false && "unhandled, functions taking prim ints as params");
+            Value *pv =
+                builder.CreateCall(bctx.popInt, {}, "param_" + p->getName());
+            bctx.insertIdentifier(p->getName(),
+                                  LLVMValueData::createPrimInt(pv));
+            // assert(false && "unhandled, functions taking prim ints as
+            // params");
         } else {
             Value *pv =
                 builder.CreateCall(bctx.popInt, {}, "param_" + p->getName());
@@ -1158,7 +1260,7 @@ LLVMClosureData materializeTopLevelStaticBinding(const Binding *b, Module &m,
     BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
     builder.SetInsertPoint(entry);
     materializeLambda(b->getRhs(), m, builder, bctx);
-    //builder.CreateRetVoid();
+    // builder.CreateRetVoid();
 
     return materializeStaticClosureForFn(F, b->getName() + "_closure", m,
                                          builder, bctx);
