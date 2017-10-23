@@ -825,9 +825,26 @@ Function *materializeCaseConstructorReturnFrame(const ExpressionCase *c,
             case CaseAlt::CAK_Int:
                 assert(false && "case of a non-int scrutinee cannot have int");
                 break;
-            case CaseAlt::CAK_Variable:
-                assert(false && "unimplemented alt codegen for cak_variable");
+            case CaseAlt::CAK_Variable: {
+                CaseAltVariable *altVariable = cast<CaseAltVariable>(a);
+                BasicBlock *bb = BasicBlock::Create(m.getContext(),
+                                                    altVariable->getLHS(), f);
+                builder.SetInsertPoint(bb);
+                // We will switch to variable case by default, since this is the
+                // _variable_ case after all.
+                // TODO: copy checks from generate prim int to here.
+                switch_->setDefaultDest(bb);
+                Value *raw = builder.CreateCall(bctx.popInt, {},
+                                                altVariable->getLHS() + "_raw");
+                const DataType *ty = getTypeOfExpression(c->getScrutinee(),
+                                                         bctx);
+                BuildCtx::Scoper s(bctx);
+                bctx.insertIdentifier(altVariable->getLHS(),
+                                      LLVMValueData(raw, ty));
+                materializeExpr(altVariable->getRHS(), m, builder, bctx);
+
                 break;
+            }
             case CaseAlt::CAK_Default:
                 assert(false && "unimplemented alt codegen for cak_default");
         }
