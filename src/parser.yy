@@ -268,11 +268,15 @@ expr:
     g_atoms.clear();
     delete $1;
   }
-  | CASE atom OF altlist { $$ = new stg::ExpressionCase($2, g_alts); 
+  | CASE expr OF altlist { $$ = new stg::ExpressionCase($2, g_alts);
                                  g_alts.clear();}
   | LET letbindings IN expr {
     $$ =  new stg::ExpressionLet(g_let_bindings, $4);
     g_let_bindings.clear();
+  }
+
+  | ATOMINT {
+    $$ = new stg::ExpressionIntLiteral(cast<AtomInt>($1)->getVal());
   }
 
 %%

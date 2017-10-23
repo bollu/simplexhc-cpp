@@ -6,11 +6,12 @@ data IntTy = IntCons (PrimInt);
 binding intcons = \() -> IntTy { IntCons (2) };
 
 binding id = \(idxparam: IntTy) -> IntTy {     
-    case idxparam of
+    case idxparam () of
         IntCons (x) -> IntCons (x);
 };
 
-binding extractIntWrapped = \(int_wrapped:IntTy) -> PrimInt { case int_wrapped of
+binding extractIntWrapped = \(int_wrapped:IntTy) -> PrimInt {
+    case int_wrapped () of
         IntCons (x) -> x (); 
 };
 
@@ -23,6 +24,6 @@ binding compose = \(f:Boxed g:Boxed x:Boxed) -> Boxed {
 binding pullapart = \() -> IntTy { compose (id id intcons) };
 
 binding main = \() -> Boxed { 
-    case pullapart of
+    case pullapart () of
         IntCons (x) -> printInt (x);
 };

@@ -8,12 +8,12 @@ binding two = \() -> IntTy { IntCons (2) };
 binding twowrapped = \() -> IntWrappedTy { IntWrappedCons (two) };
 
 binding processint = \(int: IntTy) -> Boxed {
-    case int of
+    case int () of
         IntCons (x) -> printInt (x);
 };
 
 
 binding main = \() -> Boxed {
-    case twowrapped of
+    case twowrapped () of
         IntWrappedCons (x) -> processint (x);
 };

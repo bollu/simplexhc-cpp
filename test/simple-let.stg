@@ -5,6 +5,6 @@ data Int  = Int (PrimInt);
 binding main = \() -> Boxed { 
     let 
         binding three = \() -> Int { Int (3) };
-    in case three of
+    in case three () of
       Int ( x ) -> printInt (x); 
 };

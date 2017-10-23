@@ -4,7 +4,7 @@
 data DInt  = Int (PrimInt) | Int2 (PrimInt PrimInt);
 
 binding three = \() -> DInt { Int2 (5 10) };
-binding main = \() -> Boxed { case three of
+binding main = \() -> Boxed { case three () of
                                 Int2 (x y) -> printInt (y);
                                 Int (x) -> printInt (x);
                             };

@@ -15,16 +15,11 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/FileSystem.h"
 #include "stgir.h"
+#include <sstream>
 
 using namespace std;
 using namespace stg;
 using namespace llvm;
-
-enum class ClosureTag {
-    FullySaturated = 0,
-    FreeBegin,  // closures with free params. For n free params, should be
-    // FreeBegin + n.
-};
 
 class BuildCtx;
 
@@ -62,6 +57,7 @@ void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
 LLVMClosureData materializeStaticClosureForFn(Function *F, std::string name,
                                               Module &m, StgIRBuilder &builder,
                                               BuildCtx &bctx);
+
 
 // http://web.iitd.ac.in/~sumeet/flex__bison.pdf
 // http://aquamentus.com/flex_bison.html
@@ -106,13 +102,11 @@ static CallInst *CreateTailCall(StgIRBuilder &builder, Value *Fn,
     return Call;
 }
 
-/*
 static Value *TransmuteToCont(Value *V, StgIRBuilder &builder) {
     Type *ContTy = FunctionType::get(builder.getVoidTy(), {}, false);
     return builder.CreateIntToPtr(V, ContTy->getPointerTo(),
-                                  V->getName() + "_transmute_to_fn");
+                                  V->getName() + "_transmute_to_cont");
 }
-*/
 
 static Value *TransmuteToInt(Value *V, StgIRBuilder &builder) {
     if (V->getType()->isIntegerTy()) return V;
@@ -297,10 +291,10 @@ class BuildCtx {
         // ClosureTy
         std::vector<Type *> StructMemberTys;
 
-        StructMemberTys = {builder.getInt64Ty(), ContTy->getPointerTo()};
+        StructMemberTys = {ContTy->getPointerTo()};
         ClosureTy[0] = StructType::create(StructMemberTys, "Closure_Free0");
         for (unsigned i = 1; i < MAX_FREE_PARAMS; i++) {
-            StructMemberTys = {builder.getInt64Ty(), ContTy->getPointerTo(),
+            StructMemberTys = {ContTy->getPointerTo(),
                                ArrayType::get(builder.getInt64Ty(), i)};
             ClosureTy[i] = StructType::create(
                 StructMemberTys, "Closure_Free" + std::to_string(i));
@@ -331,8 +325,11 @@ class BuildCtx {
         // delete this->stackIntTop;
     }
 
-    // check if a type is that of PrimInt
-    bool isPrimIntTy(DataType *Ty) const { return Ty == this->primIntTy; }
+    // Check if a type is that of PrimInt.
+    bool isPrimIntTy(const DataType *Ty) const { return Ty == this->primIntTy; }
+
+    // Return the PrimInt type.
+    const DataType *getPrimIntTy() const { return this->primIntTy; }
 
     // map a binding to a function in the given scope.
     void insertTopLevelBinding(Binding *b, LLVMClosureData bdata) {
@@ -367,12 +364,10 @@ class BuildCtx {
         return It->second;
     }
 
-    Optional<LLVMClosureData> getStaticClosureDataFromName(
-        std::string name, StgIRBuilder &builder) const {
+    Optional<LLVMClosureData> getTopLevelBindingFromName(
+            std::string name) const {
         auto It = staticBindingMap.find(name);
         if (It == staticBindingMap.end()) {
-            cerr << "unknown closure: " << name << "\n";
-            // assert(false && "unknown closure");
             return None;
         }
         return It->second;
@@ -539,82 +534,18 @@ class BuildCtx {
 
         BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
         builder.SetInsertPoint(entry);
-        Argument *argInt = &*F->arg_begin();
-        argInt->setName("cls_as_int");
+        Argument *closureAddr = &*F->arg_begin();
+        closureAddr->setName("closure_addr");
 
-        Value *argRawMem = builder.CreateIntToPtr(argInt, getRawMemTy(builder),
-                                                  "cls_as_raw_mem");
-        Value *typedClosure = builder.CreateBitCast(
-            argRawMem, bctx.ClosureTy[bctx.MAX_FREE_PARAMS - 1]->getPointerTo(),
-            "cls_as_closure");
-
-        Value *tagSlot = builder.CreateGEP(
-            typedClosure, {builder.getInt64(0), builder.getInt32(0)},
-            "tag_slot");
-        Value *tag = builder.CreateLoad(tagSlot, "tag");
-        Value *nFreeVars = builder.CreateSub(
-            tag, builder.getInt64((unsigned)ClosureTag::FreeBegin),
-            "nFreeVars");
-        // typecast it to the "largest" possible, because at max, we will index
-        // it till the max.
-
-        BasicBlock *free_push_loop_header =
-            BasicBlock::Create(m.getContext(), "free_push_loop_header", F);
-        BasicBlock *free_push_loop_body =
-            BasicBlock::Create(m.getContext(), "free_push_loop_body", F);
-        BasicBlock *free_push_loop_exit =
-            BasicBlock::Create(m.getContext(), "free_push_loop_exit", F);
-
-        // entry---
-        builder.SetInsertPoint(entry);
-        Value *hasAnyFreeVars = builder.getFalse();
-        // Value *hasAnyFreeVars = builder.CreateICmpUGE(
-        //    nFreeVars, builder.getInt64(1), "has_any_free_vars");
-        builder.CreateCondBr(hasAnyFreeVars, free_push_loop_header,
-                             free_push_loop_exit);
-
-        // preheader---"
-        builder.SetInsertPoint(free_push_loop_header);
-        PHINode *i = builder.CreatePHI(builder.getInt64Ty(), 2, "i");
-        builder.CreateBr(free_push_loop_body);
-
-        // body----
-        builder.SetInsertPoint(free_push_loop_body);
-        Value *iNext = builder.CreateAdd(i, builder.getInt64(1), "i.next");
-        Value *shouldLoop =
-            builder.CreateICmpULE(iNext, nFreeVars, "should_loop");
-        // TODO: fill up loop with something useful
-        // Push free parameters onto the stack.
-        Value *freeParamSlot = builder.CreateGEP(
-            typedClosure, {builder.getInt64(0), builder.getInt32(2), i},
-            "free_param_slot");
-        Value *freeParam = builder.CreateLoad(freeParamSlot, "free_param");
-        builder.CreateCall(bctx.pushInt, freeParam);
-
-#ifdef TRAP
-
-        // Function *trap = getOrCreateFunction(
-        //    m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
-        // builder.CreateCall(trap, {});
-#endif
-        builder.CreateCondBr(shouldLoop, free_push_loop_header,
-                             free_push_loop_exit);
-
-        // hook up phi node.
-        i->addIncoming(iNext, free_push_loop_body);
-        i->addIncoming(builder.getInt64(1), entry);
-
-        // exit---
-        builder.SetInsertPoint(free_push_loop_exit);
-        Value *fnSlot = builder.CreateGEP(
-            typedClosure, {builder.getInt64(0), builder.getInt32(1)},
-            "fn_slot");
-        Value *fn = builder.CreateLoad(fnSlot, "fn");
+        Value *closureStruct = builder.CreateIntToPtr(closureAddr, bctx.ClosureTy[0]->getPointerTo());
+        Value *contSlot = builder.CreateGEP(closureStruct, {builder.getInt64(0), builder.getInt32(0)}, "cont_slot");
+        Value *cont = builder.CreateLoad(contSlot, "cont");
+        // Value *contAddr = builder.CreatePtrToInt(cont, builder.getInt64Ty(), "cont_addr");
 
         // store the address of the closure we are entering
-        builder.CreateStore(argInt, bctx.enteringClosureAddr);
+        builder.CreateStore(closureAddr, bctx.enteringClosureAddr);
         // call the function
-        builder.CreateCall(fn, {});
+        builder.CreateCall(cont, {});
         builder.CreateRetVoid();
         return F;
     }
@@ -670,13 +601,10 @@ void materializeAp(const ExpressionAp *ap, Module &m, StgIRBuilder &builder,
             v = builder.CreatePtrToInt(v, builder.getInt64Ty(),
                                        v->getName() + "_to_int");
         }
-        errs() << __LINE__ << "\n";
-        errs() << "v: " << *v << "\n";
         builder.CreateCall(bctx.pushInt, {v});
-        errs() << __LINE__ << "\n";
     }
     Optional<LLVMClosureData> Cls =
-        bctx.getStaticClosureDataFromName(ap->getFnName(), builder);
+            bctx.getTopLevelBindingFromName(ap->getFnName());
     if (Cls) {
         materializeEnterStaticClosure(*Cls, m, builder, bctx);
     } else {
@@ -783,7 +711,6 @@ void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
 static const DataType *getCommonDataTypeFromAlts(const ExpressionCase *c,
                                                  const StgIRBuilder &builder,
                                                  const BuildCtx &bctx) {
-    errs() << __PRETTY_FUNCTION__ << "\n";
     const DataType *commondecl = nullptr;
     auto setCommonType = [&](const DataType *newdecl) -> void {
         if (commondecl == nullptr) {
@@ -814,13 +741,16 @@ static const DataType *getCommonDataTypeFromAlts(const ExpressionCase *c,
 };
 
 // materialize alternate handling of case `ident` of ...)
-Function *materializeCaseConstructorAlts(const ExpressionCase *c, Module &m,
-                                         StgIRBuilder &builder,
-                                         BuildCtx &bctx) {
-    const Identifier scrutinee = cast<AtomIdent>(c->getScrutinee())->getIdent();
+Function *materializeCaseConstructorReturnFrame(const ExpressionCase *c,
+                                                Module &m,
+                                                StgIRBuilder builder,
+                                                BuildCtx &bctx) {
+    //const Identifier scrutinee = cast<AtomIdent>(c->getScrutinee())->getIdent();
+    std::stringstream scrutineeNameSS;
+    scrutineeNameSS << *c->getScrutinee();
     Function *f = createNewFunction(
         m, FunctionType::get(builder.getVoidTy(), {}, /*isVarArg=*/false),
-        "case_alt_" + scrutinee);
+        "case_alt_" + scrutineeNameSS.str());
     BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", f);
     builder.SetInsertPoint(entry);
 
@@ -884,6 +814,7 @@ Function *materializeCaseConstructorAlts(const ExpressionCase *c, Module &m,
     return f;
 }
 
+/*
 // case over a constructor. Note: this is a HACK, this is not how you should
 // find out what this is. The correct thing to to is to look at the type
 // signature of the scrutinee and then decide what is supposed to happen.
@@ -895,15 +826,16 @@ void materializeCaseConstructor(const ExpressionCase *c, Module &m,
     // this.
     BasicBlock *BB = builder.GetInsertBlock();
 
+
     const Identifier scrutineeName =
         cast<AtomIdent>(c->getScrutinee())->getIdent();
     // TODO: come up with a notion of scope.
     // In the case of constructor, the static closure entry _must_ exist.
     Optional<LLVMClosureData> NextCls =
-        bctx.getStaticClosureDataFromName(scrutineeName, builder);
+        bctx.getTopLevelBindingFromName(scrutineeName, builder);
     // push a return continuation for the function `Next` to follow.
-    Function *AltHandler = materializeCaseConstructorAlts(c, m, builder, bctx);
-
+    Function *AltHandler = materializeCaseConstructorReturnFrame(c, m, builder,
+                                                                 bctx);
     builder.SetInsertPoint(BB);
     builder.CreateCall(bctx.pushReturnCont, {AltHandler});
     if (NextCls)
@@ -915,15 +847,23 @@ void materializeCaseConstructor(const ExpressionCase *c, Module &m,
     builder.SetInsertPoint(BB);
     builder.CreateRetVoid();
 }
+*/
 
 // Materialize a case over Prim int.
-void materializePrimitiveCase(const ExpressionCase *c, Module &m,
-                              StgIRBuilder builder, BasicBlock *insertBlock,
-                              BuildCtx &bctx) {
-    builder.SetInsertPoint(insertBlock);
+Function *materializePrimitiveCaseReturnFrame(const ExpressionCase *c, Module &m,
+                                         StgIRBuilder builder,
+                                         BuildCtx &bctx) {
+    std::stringstream namess;
+    namess << *c->getScrutinee();
+
+    Function *F = createNewFunction(m, FunctionType::get(builder.getVoidTy(),
+                                                         {}, /*isVarArg=*/false),
+                                                         namess.str());
+    BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
+    builder.SetInsertPoint(entry);
 
     Value *scrutinee = builder.CreateCall(bctx.popInt, {}, "scrutinee");
-    BasicBlock *defaultBB = BasicBlock::Create(m.getContext(), "default", insertBlock->getParent());
+    BasicBlock *defaultBB = BasicBlock::Create(m.getContext(), "alt_default", F);
     SwitchInst *switchInst = builder.CreateSwitch(scrutinee, defaultBB);
 
 
@@ -947,7 +887,7 @@ void materializePrimitiveCase(const ExpressionCase *c, Module &m,
                 const CaseAltInt *ci = cast<CaseAltInt>(alt);
                 BasicBlock *BB = BasicBlock::Create(
                     m.getContext(), "alt_" + std::to_string(ci->getLHS()),
-                    insertBlock->getParent());
+                    entry->getParent());
                 switchInst->addCase(builder.getInt64(ci->getLHS()), BB);
                 // insert code for expression in the new BB.
                 builder.SetInsertPoint(BB);
@@ -988,16 +928,58 @@ void materializePrimitiveCase(const ExpressionCase *c, Module &m,
                 m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
         builder.CreateCall(trap, {});
     }
+
+    return F;
 }
 
+static const DataType *getTypeOfExpression(const Expression *e,
+                                     const BuildCtx &bctx) {
+  switch (e->getKind()) {
+  case Expression::EK_Ap: {
+    const ExpressionAp *ap = cast<ExpressionAp>(e);
+    const std::string fnName = ap->getFnName();
+    return bctx.getDataTypeFromName(fnName);
+    break;
+  }
+  case Expression::EK_IntLiteral: {
+    return bctx.getPrimIntTy();
+    break;
+  }
+  case Expression::EK_Case:
+  case Expression::EK_Cons:
+  case Expression::EK_Let:
+    assert(false && "unimplemented getTypeOfExpression");
+  }
+}
 void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
                      BuildCtx &bctx) {
     BasicBlock *insertBlock = builder.GetInsertBlock();
-    switch (c->getScrutinee()->getKind()) {
+    const Expression *scrutinee = c->getScrutinee();
+    const DataType *scrutineety = getTypeOfExpression(scrutinee, bctx);
+    if (bctx.isPrimIntTy(scrutineety)) {
+        Function *continuation = materializePrimitiveCaseReturnFrame(c, m, builder, bctx);
+        Value *clsRaw = builder.CreateCall(bctx.malloc, {builder.getInt64(m.getDataLayout().getTypeAllocSize(bctx.ClosureTy[0]))}, "closure_raw");
+        Value *clsTyped = builder.CreateBitCast(clsRaw, bctx.ClosureTy[0]->getPointerTo(), "closure_typed");
+        Value *fnSlot = builder.CreateGEP(clsTyped, {builder.getInt64(0), builder.getInt32(0)}, "fn_slot");
+        builder.CreateStore(continuation, fnSlot);
+        Value *clsAsContHack = builder.CreateBitCast(clsTyped, bctx.ContTy->getPointerTo(), "closure_as_cont_omg_this_is_a_hack_change_type_of_return_stack");
+
+        builder.CreateCall(bctx.pushReturnCont, {clsAsContHack});
+        materializeExpr(scrutinee, m, builder, bctx);
+        builder.CreateRetVoid();
+    }
+    else {
+        Function *continuation = materializeCaseConstructorReturnFrame(c, m, builder, bctx);
+        builder.CreateCall(bctx.pushReturnCont, {continuation});
+        materializeExpr(scrutinee, m, builder, bctx);
+    }
+
+
+    /* switch (c->getScrutinee()->getKind()) {
         case Atom::AK_Int: {
             const AtomInt *ai = cast<AtomInt>(c->getScrutinee());
             builder.CreateCall(bctx.pushInt, {builder.getInt64(ai->getVal())});
-            materializePrimitiveCase(c, m, builder, builder.GetInsertBlock(),
+            materializePrimitiveCaseReturnFrame(c, m, builder, builder.GetInsertBlock(),
                                      bctx);
 
             break;
@@ -1018,7 +1000,7 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
 
             break;
         }
-    };
+    };*/
 }
 
 // *** LET CODEGEN
@@ -1057,18 +1039,11 @@ Value *_allocateLetBindingDynamicClosure(const Binding *b, BasicBlock *BB,
     Type *closureTy = bctx.ClosureTy[nFreeParams];
     builder.SetInsertPoint(BB);
 
-    const int sizeInBytes = m.getDataLayout().getTypeAllocSize(closureTy);
+    const uint64_t sizeInBytes = m.getDataLayout().getTypeAllocSize(closureTy);
     Value *rawMem = builder.CreateCall(
         bctx.malloc, {builder.getInt64(sizeInBytes)}, "rawmem");
     Value *typedMem = builder.CreateBitCast(rawMem, closureTy->getPointerTo(),
                                             "closure_" + b->getName());
-
-    Value *tagSlot = builder.CreateGEP(
-        typedMem, {builder.getInt64(0), builder.getInt32(0)}, "tag_slot");
-    builder.CreateStore(
-        builder.getInt64((unsigned)ClosureTag::FreeBegin + nFreeParams),
-        tagSlot);
-
     // no store to function slot, args. These come later.
     return typedMem;
 }
@@ -1098,7 +1073,7 @@ Function *_materializeDynamicLetBinding(const Binding *b, Module &m,
     for (Parameter *p : b->getRhs()->free_params_range()) {
         Value *v = builder.CreateGEP(
             closure,
-            {builder.getInt64(0), builder.getInt32(2), builder.getInt32(i)},
+            {builder.getInt64(0), builder.getInt32(1), builder.getInt32(i)},
             p->getName() + "slot");
         v = builder.CreateLoad(v, p->getName());
         DataType *ty = bctx.getDataTypeFromName(p->getTypeName());
@@ -1137,7 +1112,7 @@ void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
         Value *cls = bctx.getIdentifier(b->getName()).v;
         // store this in the closure slot.
         Value *fnSlot =
-            builder.CreateGEP(cls, {builder.getInt64(0), builder.getInt32(1)},
+            builder.CreateGEP(cls, {builder.getInt64(0), builder.getInt32(0)},
                               b->getName() + "_fn_slot");
         builder.CreateStore(f, fnSlot);
 
@@ -1145,7 +1120,7 @@ void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
         for (Parameter *p : b->getRhs()->free_params_range()) {
             Value *freeParamSlot = builder.CreateGEP(
                 cls,
-                {builder.getInt64(0), builder.getInt32(2), builder.getInt32(i)},
+                {builder.getInt64(0), builder.getInt32(1), builder.getInt32(i)},
                 b->getName() + "_free_param_" + p->getName() + "_slot");
             Value *v = bctx.getIdentifier(p->getName()).v;
             v = TransmuteToInt(v, builder);
@@ -1154,13 +1129,19 @@ void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
         }
     }
 
-    // TODO: codegen each binding. Fuck that for now.
 
     // Now create heap locations for these bad boys and
     // set those heap locations to be the "correct"
     // locations.
     materializeExpr(l->getRHS(), m, builder, bctx);
 };
+
+void materializeExprIntLiteral(const ExpressionIntLiteral *e, Module &m,
+                               StgIRBuilder &builder, BuildCtx &bctx) {
+    builder.CreateCall(bctx.pushInt, {builder.getInt64(e->getValue())});
+    Value *cont = builder.CreateCall(bctx.popReturnCont, {}, "return_cont_" + std::to_string(e->getValue()));
+    materializeEnterDynamicClosure(cont, m, builder, bctx);
+}
 
 void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
                      BuildCtx &bctx) {
@@ -1178,6 +1159,9 @@ void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
         case Expression::EK_Let:
             materializeLet(cast<ExpressionLet>(e), m, builder, bctx);
             break;
+        case Expression::EK_IntLiteral:
+            materializeExprIntLiteral(cast<ExpressionIntLiteral>(e), m, builder,
+                                      bctx);
     };
 }
 
@@ -1204,15 +1188,8 @@ LLVMClosureData materializeStaticClosureForFn(Function *F, std::string name,
 
     // 2. Create the initializer for the closure
     Constant *initializer = [&] {
-        std::vector<Constant *> initializer_list;
-        // tag.
-        initializer_list.push_back(ConstantInt::get(
-            builder.getInt64Ty(), (unsigned)ClosureTag::FreeBegin));
-        // function (to jump into)
-        initializer_list.push_back(F);
-
         // assert(nFreeVars == 0 && "free variables not supported yet.");
-        return ConstantStruct::get(closureTy, initializer_list);
+        return ConstantStruct::get(closureTy, {F});
     }();
 
     GlobalVariable *closure =
@@ -1260,7 +1237,6 @@ StructType *materializeDataConstructor(const DataType *decl,
 };
 
 int compile_program(stg::Program *program, int argc, char **argv) {
-    cout << "> program: " << *program << "\n";
     static LLVMContext ctx;
     static StgIRBuilder builder(ctx);
 
@@ -1278,9 +1254,6 @@ int compile_program(stg::Program *program, int argc, char **argv) {
     }
 
     for (Binding *b : program->bindings_range()) {
-        cout << "==BINDING:==\n";
-        cout << *b << "\n";
-        cout << "----\n";
         if (b->getName() == "main") {
             assert(!entrystg && "program has more than one main.");
             entrystg = b;

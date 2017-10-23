@@ -124,6 +124,10 @@ void ExpressionLet::print(std::ostream &os) const {
     os << "in";
     os << *rhs;
 }
+
+void ExpressionIntLiteral::print(std::ostream &os) const {
+    os << value;
+}
 // Case
 
 std::ostream &stg::operator<<(std::ostream &os, const CaseAlt &a) {

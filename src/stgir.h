@@ -163,7 +163,7 @@ class AtomIdent : public Atom {
 // *** Expression ****
 class Expression {
    public:
-    enum ExpressionKind { EK_Ap, EK_Cons, EK_Case, EK_Let };
+    enum ExpressionKind { EK_Ap, EK_Cons, EK_Case, EK_Let, EK_IntLiteral };
     virtual void print(std::ostream &os) const = 0;
     ExpressionKind getKind() const { return kind; }
 
@@ -285,6 +285,21 @@ class ExpressionLet : public Expression {
         return E->getKind() == Expression::EK_Let;
     }
 };
+    class ExpressionIntLiteral : public Expression {
+    private:
+        int value;
+    public:
+      ExpressionIntLiteral(int value)
+          : Expression(Expression::EK_IntLiteral), value(value) {}
+
+      int getValue() const { return value; }
+
+        static bool classof(const Expression *E) {
+          return E->getKind() == Expression::EK_IntLiteral;
+        }
+        void print(std::ostream &os) const;
+    };
+
 
 // *** Alt ***
 class CaseAlt {
@@ -384,11 +399,11 @@ class ExpressionCase : public Expression {
     using AltsList = SmallVector<CaseAlt *, 2>;
 
    private:
-    Atom *scrutinee;
+    Expression *scrutinee;
     AltsList alts;
 
    public:
-    ExpressionCase(Atom *scrutinee, ArrayRef<CaseAlt *> altsref)
+    ExpressionCase(Expression *scrutinee, ArrayRef<CaseAlt *> altsref)
         : Expression(Expression::EK_Case), scrutinee(scrutinee) {
         for (CaseAlt *alt : altsref) {
             alts.push_back(alt);
@@ -420,8 +435,8 @@ class ExpressionCase : public Expression {
     static bool classof(const Expression *E) {
         return E->getKind() == Expression::EK_Case;
     }
-    Atom *getScrutinee() { return scrutinee; }
-    const Atom *getScrutinee() const { return scrutinee; }
+
+    const Expression *getScrutinee() const { return scrutinee; }
 
     using iterator = AltsList::iterator;
     using const_iterator = AltsList::const_iterator;

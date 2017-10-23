@@ -10,6 +10,6 @@ binding k = \(x:Boxed y:Boxed) -> Boxed { x () };
 binding main = \() -> Boxed { let 
                                 binding k1 = \() -> Boxed { k (one) };
                                 binding k12 = \(k1: Boxed) () -> Boxed { k1 (two) };
-                             in case k12 of
+                             in case k12 () of
                                     IntCons (x) -> printInt (x);
                            };
