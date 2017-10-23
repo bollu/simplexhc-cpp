@@ -1115,7 +1115,9 @@ void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
     BuildCtx::Scoper scoper(bctx);
     for (const Parameter *p : l->bound_params_range()) {
         if (p->getTypeName() == "PrimInt") {
-            assert(false && "unhandled, functions taking prim ints as params");
+            Value *pv = builder.CreateCall(bctx.popInt, {}, "param_" + p->getName());
+            bctx.insertIdentifier(p->getName(), LLVMValueData::createPrimInt(pv));
+            // assert(false && "unhandled, functions taking prim ints as params");
         } else {
             Value *pv =
                 builder.CreateCall(bctx.popInt, {}, "param_" + p->getName());

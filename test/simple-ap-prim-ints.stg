@@ -1,0 +1,6 @@
+# RUN: ./compile-and-run-program.sh %s | FileCheck %s
+# CHECK: 4
+
+data Int  = Int (PrimInt);
+binding three = \(i: PrimInt, j: PrimInt, k: PrimInt) -> Boxed { printInt (j) };
+binding main = \() -> Boxed { three (500 4 100) };
