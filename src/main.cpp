@@ -814,41 +814,6 @@ Function *materializeCaseConstructorReturnFrame(const ExpressionCase *c,
     return f;
 }
 
-/*
-// case over a constructor. Note: this is a HACK, this is not how you should
-// find out what this is. The correct thing to to is to look at the type
-// signature of the scrutinee and then decide what is supposed to happen.
-// Right now, I'm only interested in getting my stuff working which is why
-// I'm doing it this way.
-void materializeCaseConstructor(const ExpressionCase *c, Module &m,
-                                StgIRBuilder &builder, BuildCtx &bctx) {
-    // NOTE: save insert BB because materializeCaseConstructorAlt changes
-    // this.
-    BasicBlock *BB = builder.GetInsertBlock();
-
-
-    const Identifier scrutineeName =
-        cast<AtomIdent>(c->getScrutinee())->getIdent();
-    // TODO: come up with a notion of scope.
-    // In the case of constructor, the static closure entry _must_ exist.
-    Optional<LLVMClosureData> NextCls =
-        bctx.getTopLevelBindingFromName(scrutineeName, builder);
-    // push a return continuation for the function `Next` to follow.
-    Function *AltHandler = materializeCaseConstructorReturnFrame(c, m, builder,
-                                                                 bctx);
-    builder.SetInsertPoint(BB);
-    builder.CreateCall(bctx.pushReturnCont, {AltHandler});
-    if (NextCls)
-        materializeEnterStaticClosure(*NextCls, m, builder, bctx);
-    else {
-        Value *V = bctx.getIdentifier(scrutineeName).v;
-        materializeEnterDynamicClosure(V, m, builder, bctx);
-    }
-    builder.SetInsertPoint(BB);
-    builder.CreateRetVoid();
-}
-*/
-
 // Materialize a case over Prim int.
 Function *materializePrimitiveCaseReturnFrame(const ExpressionCase *c, Module &m,
                                          StgIRBuilder builder,
@@ -973,34 +938,6 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
         builder.CreateCall(bctx.pushReturnCont, {continuation});
         materializeExpr(scrutinee, m, builder, bctx);
     }
-
-
-    /* switch (c->getScrutinee()->getKind()) {
-        case Atom::AK_Int: {
-            const AtomInt *ai = cast<AtomInt>(c->getScrutinee());
-            builder.CreateCall(bctx.pushInt, {builder.getInt64(ai->getVal())});
-            materializePrimitiveCaseReturnFrame(c, m, builder, builder.GetInsertBlock(),
-                                     bctx);
-
-            break;
-        }
-        case Atom::AK_Ident: {
-            const AtomIdent *aid = cast<AtomIdent>(c->getScrutinee());
-            DataType *Ty = bctx.getDataTypeFromName(aid->getIdent());
-            if (bctx.isPrimIntTy(Ty)) {
-                assert(false &&
-                       "cannot handle scrutinees of type primInt (that are not "
-                       "directly a pattern match over an int)");
-            } else {
-                // HACK: Right now, we assume that all non-direct matches are
-                // over constructors, this is wrong a f. We should actually look
-                // at the type of c->scrutinee and then decide.
-                materializeCaseConstructor(c, m, builder, bctx);
-            }
-
-            break;
-        }
-    };*/
 }
 
 // *** LET CODEGEN
