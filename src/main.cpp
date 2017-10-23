@@ -29,6 +29,8 @@ using StgIRBuilder = IRBuilder<>;
 void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
                      BuildCtx &bctx);
 
+std::set<Identifier> getFreeVarsInCase(const ExpressionCase *c, const BuildCtx &bctx);
+
 struct LLVMClosureData {
     AssertingVH<Function> fn;
     AssertingVH<GlobalVariable> closure;
@@ -363,7 +365,7 @@ class BuildCtx {
     LLVMValueData getIdentifier(Identifier ident) {
         auto It = identifiermap.find(ident);
         if (It == identifiermap.end()) {
-            cerr << "Unknown identifier: " << ident << "\n";
+            cerr << "Unknown identifier: |" << ident << "|\n";
             identifiermap.dump([&](const Identifier &id,
                                    const LLVMValueData &vdata,
                                    unsigned nesting) {
@@ -417,6 +419,8 @@ class BuildCtx {
 
         errs() << "Unknown name for data type: " << name << "\n";
         assert(false && "unknown type name");
+        report_fatal_error("unknown type name");
+
     }
 
     // Class to create and destroy a scope with RAII.
@@ -759,8 +763,7 @@ static const DataType *getCommonDataTypeFromAlts(const ExpressionCase *c,
 Function *materializeCaseConstructorReturnFrame(const ExpressionCase *c,
                                                 Module &m, StgIRBuilder builder,
                                                 BuildCtx &bctx) {
-    // const Identifier scrutinee =
-    // cast<AtomIdent>(c->getScrutinee())->getIdent();
+
     std::stringstream scrutineeNameSS;
     scrutineeNameSS << *c->getScrutinee();
     Function *f = createNewFunction(
@@ -831,16 +834,46 @@ Function *materializeCaseConstructorReturnFrame(const ExpressionCase *c,
 
 // Materialize a case over Prim int.
 Function *materializePrimitiveCaseReturnFrame(const ExpressionCase *c,
+                                              const std::vector<Identifier> freeVars,
                                               Module &m, StgIRBuilder builder,
                                               BuildCtx &bctx) {
+
     std::stringstream namess;
-    namess << *c->getScrutinee();
+    namess << "case_" <<  *c->getScrutinee() << "_alts";
 
     Function *F = createNewFunction(
         m, FunctionType::get(builder.getVoidTy(), {}, /*isVarArg=*/false),
         namess.str());
     BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
     builder.SetInsertPoint(entry);
+
+    // **** COPY PASTE BEGIN
+    // here is code duplication in some sense with materializeDynamicLetBinding
+    // Open a new scope.
+    BuildCtx::Scoper s(bctx);
+    if (freeVars.size() > 0) {
+        Value *closureAddr =
+                builder.CreateLoad(bctx.enteringClosureAddr,
+                                   "closure_addr_int");
+        Value *closure = builder.CreateIntToPtr(
+                closureAddr,
+                bctx.ClosureTy[freeVars.size()]->getPointerTo(),
+                "closure_typed");
+        int i = 0;
+        for (Identifier id : freeVars) {
+            errs() << __FUNCTION__ << " | i:" << i<< " |id:" << id << "\n";
+            Value *v = builder.CreateGEP(
+                    closure,
+                    {builder.getInt64(0), builder.getInt32(1),
+                     builder.getInt32(i)},
+                    id + "_free_param_slot");
+            v = builder.CreateLoad(v, id);
+            DataType *ty = bctx.getIdentifier(id).stgtype;
+            bctx.insertIdentifier(id, LLVMValueData(v, ty));
+            i++;
+        }
+    }
+    // **** COPY PASTE END
 
     Value *scrutinee = builder.CreateCall(bctx.popInt, {}, "scrutinee");
     BasicBlock *defaultBB =
@@ -913,11 +946,11 @@ Function *materializePrimitiveCaseReturnFrame(const ExpressionCase *c,
 
 static const DataType *getTypeOfExpression(const Expression *e,
                                            const BuildCtx &bctx) {
+
     switch (e->getKind()) {
         case Expression::EK_Ap: {
             const ExpressionAp *ap = cast<ExpressionAp>(e);
             const std::string fnName = ap->getFnName();
-            return bctx.getDataTypeFromName(fnName);
             break;
         }
         case Expression::EK_IntLiteral: {
@@ -927,6 +960,8 @@ static const DataType *getTypeOfExpression(const Expression *e,
         case Expression::EK_Case:
         case Expression::EK_Cons:
         case Expression::EK_Let:
+            errs() << __PRETTY_FUNCTION__ << "+++" << __LINE__ << "\n====\n";
+            report_fatal_error("foo");
             assert(false && "unimplemented getTypeOfExpression");
     }
 }
@@ -1014,24 +1049,47 @@ std::set<Identifier> getFreeVarsInCase(const ExpressionCase *c, const BuildCtx &
 void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
                      BuildCtx &bctx) {
 
-    assert(getFreeVarsInCase(c, bctx).size() == 0 && "have case with free variables, cannot codegen!");
+    // use std::vector to prevent all kinds of subtle bugs with reordering.
+    const std::vector<Identifier> freeVars = [&]() {
+        std::set<Identifier> ids = getFreeVarsInCase(c, bctx);
+        std::vector<Identifier> vecids;
+        errs() << "===IDS===\n";
+        for(Identifier id : ids) {
+            vecids.push_back(id);
+            errs() << "-" << id << "\n";
+        }
+        errs() << "===\n";
+        return vecids;
+    }();
 
     BasicBlock *insertBlock = builder.GetInsertBlock();
     const Expression *scrutinee = c->getScrutinee();
     const DataType *scrutineety = getTypeOfExpression(scrutinee, bctx);
+
     if (bctx.isPrimIntTy(scrutineety)) {
         Function *continuation =
-            materializePrimitiveCaseReturnFrame(c, m, builder, bctx);
+            materializePrimitiveCaseReturnFrame(c, freeVars, m, builder, bctx);
         Value *clsRaw = builder.CreateCall(
             bctx.malloc,
             {builder.getInt64(
-                m.getDataLayout().getTypeAllocSize(bctx.ClosureTy[0]))},
+                m.getDataLayout().getTypeAllocSize(bctx.ClosureTy[freeVars.size()]))},
             "closure_raw");
         Value *clsTyped = builder.CreateBitCast(
-            clsRaw, bctx.ClosureTy[0]->getPointerTo(), "closure_typed");
+            clsRaw, bctx.ClosureTy[freeVars.size()]->getPointerTo(), "closure_typed");
         Value *fnSlot = builder.CreateGEP(
             clsTyped, {builder.getInt64(0), builder.getInt32(0)}, "fn_slot");
         builder.CreateStore(continuation, fnSlot);
+
+        // store free vars into the slot.
+        int i = 0;
+        for(Identifier freeVar: freeVars) {
+            Value *freeVarSlot = builder.CreateGEP(clsTyped, {builder.getInt64(0), builder.getInt32(1), builder.getInt32(i)}, freeVar + "_free_in_case_slot");
+            Value *freeVarVal = bctx.getIdentifier(freeVar).v;
+            freeVarVal = TransmuteToInt(freeVarVal, builder);
+            builder.CreateStore(freeVarVal, freeVarSlot);
+            i++;
+        }
+
         Value *clsAsContHack = builder.CreateBitCast(
             clsTyped, bctx.ContTy->getPointerTo(),
             "closure_as_cont_omg_this_is_a_hack_change_type_of_return_stack");
@@ -1040,6 +1098,8 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
         materializeExpr(scrutinee, m, builder, bctx);
         builder.CreateRetVoid();
     } else {
+        // I don't care about free variables in this case right now.
+        assert(freeVars.size() == 0 && "have case with free variables, cannot codegen!");
         Function *continuation =
             materializeCaseConstructorReturnFrame(c, m, builder, bctx);
         builder.CreateCall(bctx.pushReturnCont, {continuation});

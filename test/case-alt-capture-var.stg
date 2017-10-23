@@ -1,12 +1,13 @@
 # RUN: ./compile-and-run-program.sh %s | FileCheck %s
-# CHECK: 3
+# CHECK: 4
 
 data Int  = Int (PrimInt);
 
 binding foo = \(primIntParam: PrimInt) -> Boxed {
     case 4 of
         r -> printInt (primIntParam);
-}
+};
+
 binding main = \() -> Boxed {
     foo (4)
 };
