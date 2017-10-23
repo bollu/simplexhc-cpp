@@ -2,12 +2,12 @@
 #include <math.h>
 #include <stack>
 #include <iostream>
+#include <vector>
 #include "stgir.h"
 
 using namespace std;
 
 #define YYERROR_VERBOSE
-#include <vector>
 using namespace std;
 using namespace stg; 
 using namespace llvm;
@@ -24,7 +24,6 @@ void yyerror(const char *s) {
   g_lexer_success = 0;
 }
 
-std::vector<Atom *> g_atoms;
 std::vector<CaseAlt *> g_alts;
 std::vector<Binding *> g_toplevel_bindings;
 std::vector<Binding *> g_let_bindings;
@@ -45,10 +44,6 @@ std::vector<Identifier> g_alt_destructure_vars;
 ParamList g_lambda_freevars;
 
 
-void add_atom_to_list (Atom *a) {
-  g_atoms.push_back(a);
-}
-
 void add_alt_to_list(CaseAlt *a) {
   g_alts.push_back(a);
 }
@@ -63,6 +58,7 @@ void add_data_constructor_to_list(DataConstructor *b) {
 %}
 
 %union{
+  std::vector<Atom *> *atomslist;
   stg::Atom *atom;
   stg::CaseAlt *alt;
   stg::Expression *expr;
@@ -108,7 +104,6 @@ void add_data_constructor_to_list(DataConstructor *b) {
 %type <datatype> datatype
 %type <dataconstructor> dataconstructor
 
-%type <UNDEF> atoms_;
 %type <UNDEF> altlist;
 %type <alt> alt;
 %type <alt> altint;
@@ -116,7 +111,8 @@ void add_data_constructor_to_list(DataConstructor *b) {
 %type <alt> altdefault;
 %type <alt> altdestructure;
 
-%type <UNDEF> atomlist;
+%type <atomslist> atoms_;
+%type <atomslist> atomlist;
 
 %type <UNDEF> params;
 %type <param> param;
@@ -172,10 +168,18 @@ atom:
   ATOMINT | ATOMSTRING
 
 atoms_: 
-  atoms_ atom { add_atom_to_list($2); }
-  | atom { add_atom_to_list ($1); }
+  atoms_ atom {
+    $$ = $1;
+    $$->push_back($2);
+  }
+  | atom {  $$ = new std::vector<Atom*>(); $$->push_back($1); }
 
-atomlist: OPENPAREN atoms_ CLOSEPAREN | OPENPAREN CLOSEPAREN
+atomlist: OPENPAREN atoms_ CLOSEPAREN {
+  $$ = $2;
+}
+| OPENPAREN CLOSEPAREN {
+    $$ = new std::vector<Atom*>();
+}
 
 // Alternates
 altlist: altlist alt SEMICOLON { add_alt_to_list($2); }
@@ -198,19 +202,17 @@ alt:
 // would be parsed as:
 // case * of (Int () -> print (x y z)
 altdestructure: 
-    CONSTRUCTORNAME atomlist {
-     for(Atom *a : g_atoms) {
-        g_alt_destructure_vars.push_back(cast<AtomIdent>(a)->getIdent());
-     }
-     g_atoms.clear();
-
-    } THINARROW expr {
+    CONSTRUCTORNAME atomlist THINARROW expr {
       // NOTE: the middle block is considered as a "marker". So, it's $3, NOT 
       // THINARROW.
       // Wish the docs were clearer about this.
-      $$ = new stg::CaseAltDestructure(*$1, g_alt_destructure_vars, $5);
+      std::vector<Identifier> idents;
+      for(Atom *a : *$2) {
+          AtomIdent *ident = cast<AtomIdent>(a);
+          idents.push_back(ident->getIdent());
+      }
+      $$ = new stg::CaseAltDestructure(*$1, idents, $4);
       g_alt_destructure_vars.clear();
-      g_atoms.clear();
       delete $1;
     }
 
@@ -258,14 +260,10 @@ letbindings: binding { g_let_bindings.push_back($1); } |
 
 expr:
   // function application
-  ATOMSTRING atomlist { $$ = new stg::ExpressionAp(cast<AtomIdent>($1)->getIdent(), g_atoms);
-                        g_atoms.clear();
-
-                        cout << "Ap: " << *$$ << "\n";
+  ATOMSTRING atomlist { $$ = new stg::ExpressionAp(cast<AtomIdent>($1)->getIdent(), *$2);
                         }
   | CONSTRUCTORNAME atomlist { 
-    $$ = new stg::ExpressionConstructor(*$1, g_atoms);
-    g_atoms.clear();
+    $$ = new stg::ExpressionConstructor(*$1, *$2);
     delete $1;
   }
   | CASE expr OF altlist { $$ = new stg::ExpressionCase($2, g_alts);
