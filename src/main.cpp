@@ -31,6 +31,9 @@ void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
 
 std::set<Identifier> getFreeVarsInCase(const ExpressionCase *c, const BuildCtx &bctx);
 
+static const DataType *getTypeOfExpression(const Expression *e,
+                                           const BuildCtx &bctx);
+
 struct LLVMClosureData {
     AssertingVH<Function> fn;
     AssertingVH<GlobalVariable> closure;
@@ -41,9 +44,9 @@ struct LLVMClosureData {
 
 struct LLVMValueData {
     AssertingVH<Value> v;
-    DataType *stgtype;
+    const DataType *stgtype;
 
-    LLVMValueData(Value *v, DataType *stgtype) : v(v), stgtype(stgtype) {}
+    LLVMValueData(Value *v, const DataType *stgtype) : v(v), stgtype(stgtype) {}
 
     static LLVMValueData createPrimInt(Value *v) {
         return LLVMValueData(v, DataType::createPrimIntTy());
@@ -346,7 +349,7 @@ class BuildCtx {
         // assert(false);
         staticBindingMap.insert(std::make_pair(b->getName(), bdata));
 
-        DataType *returnTy =
+        const DataType *returnTy =
             this->getDataTypeFromName(b->getRhs()->getReturnTypeName());
         LLVMValueData vdata(&*bdata.closure, returnTy);
         identifiermap.insert(b->getName(), vdata);
@@ -407,7 +410,7 @@ class BuildCtx {
         dataTypeMap[name] = datatype;
     }
 
-    DataType *getDataTypeFromName(std::string name) const {
+   const  DataType *getDataTypeFromName(std::string name) const {
         auto It = dataTypeMap.find(name);
         if (It != dataTypeMap.end()) {
             return It->second;
@@ -717,7 +720,7 @@ void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
         if (cons->getTypeName(i) == "PrimInt") {
             bctx.insertIdentifier(var, LLVMValueData::createPrimInt(V));
         } else {
-            DataType *Ty = bctx.getDataTypeFromName(cons->getTypeName(i));
+            const DataType *Ty = bctx.getDataTypeFromName(cons->getTypeName(i));
             bctx.insertIdentifier(var, LLVMValueData(V, Ty));
             errs() << __PRETTY_FUNCTION__ << ":" << __LINE__
                    << " inserted value corresponding to int as an expr\n";
@@ -868,7 +871,7 @@ Function *materializePrimitiveCaseReturnFrame(const ExpressionCase *c,
                      builder.getInt32(i)},
                     id + "_free_param_slot");
             v = builder.CreateLoad(v, id);
-            DataType *ty = bctx.getIdentifier(id).stgtype;
+            const DataType *ty = bctx.getIdentifier(id).stgtype;
             bctx.insertIdentifier(id, LLVMValueData(v, ty));
             i++;
         }
@@ -1180,7 +1183,7 @@ Function *_materializeDynamicLetBinding(const Binding *b, Module &m,
             {builder.getInt64(0), builder.getInt32(1), builder.getInt32(i)},
             p->getName() + "slot");
         v = builder.CreateLoad(v, p->getName());
-        DataType *ty = bctx.getDataTypeFromName(p->getTypeName());
+        const DataType *ty = bctx.getDataTypeFromName(p->getTypeName());
         bctx.insertIdentifier(p->getName(), LLVMValueData(v, ty));
         // builder.createGEP(bctx.enter
         i++;
@@ -1202,7 +1205,7 @@ void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
     for (Binding *b : l->bindings_range()) {
         Value *cls =
             _allocateLetBindingDynamicClosure(b, Entry, m, builder, bctx);
-        DataType *Ty =
+        const DataType *Ty =
             bctx.getDataTypeFromName(b->getRhs()->getReturnTypeName());
         // So, because function applications are _fully saturated_, I can
         // consider the type of a let-binding to be the return type. Is this
@@ -1283,7 +1286,7 @@ void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
         } else {
             Value *pv =
                 builder.CreateCall(bctx.popInt, {}, "param_" + p->getName());
-            DataType *Ty = bctx.getDataTypeFromName(p->getTypeName());
+            const DataType *Ty = bctx.getDataTypeFromName(p->getTypeName());
             bctx.insertIdentifier(p->getName(), LLVMValueData(pv, Ty));
         }
     }
