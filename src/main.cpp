@@ -235,6 +235,7 @@ class BuildCtx {
 
     AssertingVH<Function> popInt, pushInt;
     LLVMClosureData *printInt;
+    LLVMClosureData *primMultiply;
     AssertingVH<Function> malloc;
     AssertingVH<Function> pushReturnCont, popReturnCont;
     AssertingVH<Function> pushHeap, popHeap;
@@ -313,6 +314,10 @@ class BuildCtx {
         }();
         this->staticBindingMap.insert(std::make_pair("printInt", *printInt));
         this->identifiermap.insert("printInt", LLVMValueData(printInt->closure, this->boxedTy));
+
+        // *** primMultiply *** //
+        createPrimFunction(m, builder, *this, "primMultiply", this->primIntTy,
+                           this->staticBindingMap, this->identifiermap);
 
         // *** enter dynamic closure ***
         enterDynamicClosure = addEnterDynamicClosureToModule(m, builder, *this);
@@ -549,6 +554,24 @@ class BuildCtx {
         builder.CreateCall(cont, {});
         builder.CreateRetVoid();
         return F;
+    }
+
+    LLVMClosureData
+    createPrimFunction(Module &m, StgIRBuilder &builder, const BuildCtx &bctx,
+                       std::string fnName,
+                       DataType *returnType,
+                       BuildCtx::StaticBindingMapTy &staticBindingMap,
+                       BuildCtx::IdentifierMapTy &identifiermap) {
+      Function *F = createNewFunction(m,
+                                      FunctionType::get(builder.getVoidTy(),
+                                                        /*isVarArg=*/false),
+                                      fnName);
+      LLVMClosureData data(materializeStaticClosureForFn(
+          F, "closure_" + fnName, m, builder, *this));
+      staticBindingMap.insert(std::make_pair(fnName, data));
+      identifiermap.insert(fnName, LLVMValueData(data.closure, returnType));
+      return data;
+
     }
 };
 
