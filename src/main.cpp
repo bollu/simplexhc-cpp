@@ -312,6 +312,7 @@ class BuildCtx {
                 F, "closure_printInt", m, builder, *this));
         }();
         this->staticBindingMap.insert(std::make_pair("printInt", *printInt));
+        this->identifiermap.insert("printInt", LLVMValueData(printInt->closure, this->boxedTy));
 
         // *** enter dynamic closure ***
         enterDynamicClosure = addEnterDynamicClosureToModule(m, builder, *this);
@@ -572,17 +573,6 @@ Value *materializeAtom(const Atom *a, StgIRBuilder &builder, BuildCtx &bctx) {
     assert(false && "unreachable, switch case should have fired");
 }
 
-// materialize the code to enter into a closure.
-void materializeEnterStaticClosure(LLVMClosureData Cls, Module &m,
-                                   StgIRBuilder &builder, BuildCtx &bctx) {
-    // for now, assume that our functions have no free vars.
-    Value *F = Cls.fn;
-    Value *closureAddr = builder.CreatePtrToInt(
-        Cls.closure, builder.getInt64Ty(), "entering_closure_addr");
-    builder.CreateStore(closureAddr, bctx.enteringClosureAddr);
-    CreateTailCall(builder, F, {});
-}
-
 void materializeEnterDynamicClosure(Value *V, Module &m, StgIRBuilder &builder,
                                     BuildCtx &bctx) {
     V = TransmuteToInt(V, builder);
@@ -603,14 +593,9 @@ void materializeAp(const ExpressionAp *ap, Module &m, StgIRBuilder &builder,
         }
         builder.CreateCall(bctx.pushInt, {v});
     }
-    Optional<LLVMClosureData> Cls =
-            bctx.getTopLevelBindingFromName(ap->getFnName());
-    if (Cls) {
-        materializeEnterStaticClosure(*Cls, m, builder, bctx);
-    } else {
-        Value *V = bctx.getIdentifier(ap->getFnName()).v;
-        materializeEnterDynamicClosure(V, m, builder, bctx);
-    }
+    Value *V = bctx.getIdentifier(ap->getFnName()).v;
+    materializeEnterDynamicClosure(V, m, builder, bctx);
+
     builder.SetInsertPoint(insertBB);
     builder.CreateRetVoid();
 };
