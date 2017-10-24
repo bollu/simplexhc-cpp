@@ -1,0 +1,6 @@
+# RUN: ./compile-and-run-program.sh %s | FileCheck %s
+# CHECK: 200
+
+binding main = \() -> Boxed { case primMultiply (10 20) of
+                                r  -> printInt (r); 
+                            };

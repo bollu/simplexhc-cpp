@@ -9,8 +9,3 @@ void printInt() {
     printf("%d", i);
 }
 
-void primMultiply() {
-    int64_t i = popInt();
-    int64_t j = popInt();
-    pushInt(i * j);
-}

@@ -321,16 +321,20 @@ class BuildCtx {
         this->identifiermap.insert(
             "printInt", LLVMValueData(printInt->closure, this->boxedTy));
 
-        // *** primMultiply *** //
-        createPrimFunction(m, builder, *this, "primMultiply", this->primIntTy,
-                           this->staticBindingMap, this->identifiermap);
 
         // *** enter dynamic closure ***
         enterDynamicClosure = addEnterDynamicClosureToModule(m, builder, *this);
+
+        // *** primMultiply *** //
+        primMultiply = addPrimMultiplyToModule(m, builder, *this);
+        this->staticBindingMap.insert(std::make_pair("primMultiply", *primMultiply));
+        this->identifiermap.insert(
+                "primMultiply", LLVMValueData(primMultiply->closure, this->primIntTy));
     }
 
     ~BuildCtx() {
         delete this->printInt;
+        delete this->primMultiply;
         // delete this->stackReturnCont;
         // delete this->stackReturnContTop;
         // delete this->stackInt;
@@ -570,6 +574,34 @@ class BuildCtx {
         builder.CreateCall(cont, {});
         builder.CreateRetVoid();
         return F;
+    }
+
+    static LLVMClosureData *addPrimMultiplyToModule(Module &m,
+                                                    StgIRBuilder builder,
+                                                    BuildCtx &bctx) {
+        Function *F = createNewFunction(
+                m,
+                FunctionType::get(builder.getVoidTy(), {},
+                        /*varargs = */ false),
+                "primMultiply");
+        BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
+        builder.SetInsertPoint(entry);
+        Value *i = builder.CreateCall(bctx.popInt, {}, "i");
+        Value *j = builder.CreateCall(bctx.popInt, {}, "j");
+        Value *result = builder.CreateMul(i, j, "result");
+
+        builder.CreateCall(bctx.pushInt, {result});
+
+
+        Value *RetFrame = builder.CreateCall(bctx.popReturnCont, {}, "return_frame");
+        RetFrame = TransmuteToInt(RetFrame, builder);
+
+        builder.CreateCall(bctx.enterDynamicClosure, RetFrame);
+        builder.CreateRetVoid();
+
+        return new LLVMClosureData(materializeStaticClosureForFn(
+                F, "closure_primMultiply", m, builder, bctx));
+
     }
 
     LLVMClosureData createPrimFunction(

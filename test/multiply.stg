@@ -1,0 +1,22 @@
+# RUN: ./compile-and-run-program.sh %s | FileCheck %s
+# CHECK: 12
+
+data Int  = IntCons (PrimInt);
+
+
+binding mult = \(int_i: Int, int_j: Int) -> Int {
+    case int_i () of
+        IntCons (iprim) -> case int_j () of
+                                IntCons(jprim) -> case primMultiply (iprim jprim) of
+                                                    r -> IntCons (r);;;
+};
+
+binding three = \() -> Int { IntCons (3) };
+binding four = \() -> Int { IntCons (4) };
+
+binding three_x_four = \() -> Int { mult (three, four) };
+
+binding main = \() -> Boxed { 
+    case three_x_four () of
+        IntCons (three_x_four_prim) -> printInt (three_x_four_prim); 
+};
