@@ -365,7 +365,7 @@ class BuildCtx {
     }
 
     // lookup an identifier form the current scope
-    LLVMValueData getIdentifier(Identifier ident) {
+    LLVMValueData getIdentifier(Identifier ident) const {
         auto It = identifiermap.find(ident);
         if (It == identifiermap.end()) {
             cerr << "Unknown identifier: |" << ident << "|\n";
@@ -826,6 +826,7 @@ Function *materializeCaseConstructorReturnFrame(const ExpressionCase *c,
                 assert(false && "case of a non-int scrutinee cannot have int");
                 break;
             case CaseAlt::CAK_Variable: {
+                assert(false && "unimplemented");
                 CaseAltVariable *altVariable = cast<CaseAltVariable>(a);
                 BasicBlock *bb = BasicBlock::Create(m.getContext(),
                                                     altVariable->getLHS(), f);
@@ -960,7 +961,6 @@ Function *materializePrimitiveCaseReturnFrame(const ExpressionCase *c,
             m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
         builder.CreateCall(trap, {});
     }
-
     return F;
 }
 
@@ -971,6 +971,7 @@ static const DataType *getTypeOfExpression(const Expression *e,
         case Expression::EK_Ap: {
             const ExpressionAp *ap = cast<ExpressionAp>(e);
             const std::string fnName = ap->getFnName();
+            return bctx.getIdentifier(fnName).stgtype;
             break;
         }
         case Expression::EK_IntLiteral: {
@@ -980,49 +981,78 @@ static const DataType *getTypeOfExpression(const Expression *e,
         case Expression::EK_Case:
         case Expression::EK_Cons:
         case Expression::EK_Let:
-            errs() << __PRETTY_FUNCTION__ << "+++" << __LINE__ << "\n====\n";
             report_fatal_error("foo");
             assert(false && "unimplemented getTypeOfExpression");
     }
+    assert(false && "unreachable");
 }
 
-// Get all identifiers reffered to by this expression, whether free or bound.
-std::set<Identifier> getIdentifiersInExpression(const Expression *e) {
+std::set<Identifier> getIdentifiersInAltLHS(const CaseAlt *alt);
+
+// Get all identifiers referred to by this expression, whether free or bound.
+std::set<Identifier> getFreeVarsInExpression(const Expression *e, iterator_range<BuildCtx::StaticBindingMapTy::const_iterator> staticBindingsRange) {
     auto extractIdentifierFromAtom = [](std::set<Identifier> &s,
                                         const Atom *a) {
         if (const AtomIdent *id = dyn_cast<AtomIdent>(a))
             s.insert(id->getIdent());
     };
 
+    std::set<Identifier> freeVars;
+
     switch (e->getKind()) {
         case Expression::EK_IntLiteral:
-            return {};
+            break;
         case Expression::EK_Ap: {
-            std::set<Identifier> ids;
             const ExpressionAp *ap = cast<ExpressionAp>(e);
-            ids.insert(ap->getFnName());
+            freeVars.insert(ap->getFnName());
             for (const Atom *p : ap->params_range())
-                extractIdentifierFromAtom(ids, p);
-            return ids;
+                extractIdentifierFromAtom(freeVars, p);
+            break;
         }
         case Expression::EK_Cons: {
-            std::set<Identifier> ids;
             const ExpressionConstructor *cons = cast<ExpressionConstructor>(e);
             for (const Atom *a : cons->args_range())
-                extractIdentifierFromAtom(ids, a);
-            return ids;
+                extractIdentifierFromAtom(freeVars, a);
+            break;
         }
         case Expression::EK_Let:
-        case Expression::EK_Case:
-            errs() << __PRETTY_FUNCTION__ << ":" << __LINE__
-                   << "|HACK: IGNORING ALL IDENTIFIERS IN CASE\n";
             assert(false && "unimplemented");
+        case Expression::EK_Case: {
+            const ExpressionCase *c = cast<ExpressionCase>(e);
+            // HACK: do not consider scrutinee as free. This is a HACK -_-"
+            cerr << "HACK: right now, we do not consider the scrutinee as "
+                    "free. This is a hack because I have more interesting "
+                    "things I want to try\n";
+            // Add the free vars in the scrutinee into the freeVars list.
+            // const std::set<Identifier> scrutineeFree(getFreeVarsInExpression(c->getScrutinee(), staticBindingsRange));
+            // freeVars.insert(scrutineeFree.begin(), scrutineeFree.end());
+
+            for(const CaseAlt *alt : c->alts_range()) {
+                // The LHS of a case alt contains bindings that are bound throughout the alt subexpression.
+                // So, we can subtract those from the RHS.
+                const std::set<Identifier> lhsBound = getIdentifiersInAltLHS(alt);
+                const std::set<Identifier> rhsFree = getFreeVarsInExpression(alt->getRHS(), staticBindingsRange);
+
+                std::set_difference(rhsFree.begin(), rhsFree.end(), lhsBound.begin(),
+                                    lhsBound.end(), std::inserter(freeVars, freeVars.begin()));
+
+            }
+            break;
+
+        }
+    };
+
+    // We can remove top-level bindings from this list, because they are always
+    // available, so they are "pseudo bound".
+    for (auto It : staticBindingsRange) {
+        freeVars.erase(It.first);
     }
-    assert(false && "unreachable");
+     return freeVars;
 }
 
-// Get the names of the variables that are feshly bound by an alt
-std::set<Identifier> getBoundIdentifiersInAlt(const CaseAlt *alt) {
+// Get the names of the variables that are feshly bound by an alt.
+// The names that are bound by an alt come from the LHS of the alt.
+std::set<Identifier> getIdentifiersInAltLHS(const CaseAlt *alt) {
     auto extractIdentfierFromAtom = [](std::set<Identifier> &s, const Atom *a) {
         if (const AtomIdent *id = dyn_cast<AtomIdent>(a))
             s.insert(id->getIdent());
@@ -1047,31 +1077,15 @@ std::set<Identifier> getBoundIdentifiersInAlt(const CaseAlt *alt) {
     assert(false && "unreachable");
 }
 
-// Return the free variables in a `case` statement.
-std::set<Identifier> getFreeVarsInCase(const ExpressionCase *c, const BuildCtx &bctx) {
-    std::set<Identifier> free;
-    for (const CaseAlt *a : c->alts_range()) {
-        std::set<Identifier> boundLHS = getBoundIdentifiersInAlt(a);
-        std::set<Identifier> allRHS = getIdentifiersInExpression(a->getRHS());
 
-        std::set_difference(allRHS.begin(), allRHS.end(), boundLHS.begin(),
-                            boundLHS.end(), std::inserter(free, free.begin()));
-    }
-
-    // We can remove top-level bindings from this list, because they are always
-    // available, so they are "pseudo bound".
-    for (auto It : bctx.getTopLevelBindings()) {
-        free.erase(It.first);
-
-    }
-  return free;
-}
 void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
                      BuildCtx &bctx) {
 
     // use std::vector to prevent all kinds of subtle bugs with reordering.
-    const std::vector<Identifier> freeVars = [&]() {
-        std::set<Identifier> ids = getFreeVarsInCase(c, bctx);
+    const std::vector<Identifier> freeVarsInAlts = [&]() {
+        // Collect all free variables in the alternates.
+        std::set<Identifier> ids = getFreeVarsInExpression(c, bctx.getTopLevelBindings());
+
         std::vector<Identifier> vecids;
         errs() << "===IDS===\n";
         for(Identifier id : ids) {
@@ -1088,21 +1102,21 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
 
     if (bctx.isPrimIntTy(scrutineety)) {
         Function *continuation =
-            materializePrimitiveCaseReturnFrame(c, freeVars, m, builder, bctx);
+            materializePrimitiveCaseReturnFrame(c, freeVarsInAlts, m, builder, bctx);
         Value *clsRaw = builder.CreateCall(
             bctx.malloc,
             {builder.getInt64(
-                m.getDataLayout().getTypeAllocSize(bctx.ClosureTy[freeVars.size()]))},
+                m.getDataLayout().getTypeAllocSize(bctx.ClosureTy[freeVarsInAlts.size()]))},
             "closure_raw");
         Value *clsTyped = builder.CreateBitCast(
-            clsRaw, bctx.ClosureTy[freeVars.size()]->getPointerTo(), "closure_typed");
+            clsRaw, bctx.ClosureTy[freeVarsInAlts.size()]->getPointerTo(), "closure_typed");
         Value *fnSlot = builder.CreateGEP(
             clsTyped, {builder.getInt64(0), builder.getInt32(0)}, "fn_slot");
         builder.CreateStore(continuation, fnSlot);
 
         // store free vars into the slot.
         int i = 0;
-        for(Identifier freeVar: freeVars) {
+        for(Identifier freeVar: freeVarsInAlts) {
             Value *freeVarSlot = builder.CreateGEP(clsTyped, {builder.getInt64(0), builder.getInt32(1), builder.getInt32(i)}, freeVar + "_free_in_case_slot");
             Value *freeVarVal = bctx.getIdentifier(freeVar).v;
             freeVarVal = TransmuteToInt(freeVarVal, builder);
@@ -1119,7 +1133,10 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
         builder.CreateRetVoid();
     } else {
         // I don't care about free variables in this case right now.
-        assert(freeVars.size() == 0 && "have case with free variables, cannot codegen!");
+        if (freeVarsInAlts.size() > 0) {
+            assert(freeVarsInAlts.size() == 0 &&
+                   "have case with free variables, cannot codegen!");
+        }
         Function *continuation =
             materializeCaseConstructorReturnFrame(c, m, builder, bctx);
         builder.CreateCall(bctx.pushReturnCont, {continuation});

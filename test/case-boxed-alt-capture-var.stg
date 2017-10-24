@@ -1,0 +1,17 @@
+# RUN: ./compile-and-run-program.sh %s | FileCheck %s
+# CHECK: 4
+# Check if the alt (which captures primIntParam) is correctly codegened
+# in the case where the case scrutinee is boxed (three)
+
+data Int  = IntCons (PrimInt);
+
+binding three = \() -> Int { IntCons (42) };
+
+binding foo = \(primIntParam: PrimInt) -> Boxed {
+    case three () of
+        r -> printInt (primIntParam);
+};
+
+binding main = \() -> Boxed {
+    foo (4)
+};
