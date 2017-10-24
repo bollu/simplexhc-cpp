@@ -621,7 +621,6 @@ void materializeEnterDynamicClosure(Value *V, Module &m, StgIRBuilder &builder,
 // work: push params in reverse order.
 void materializeAp(const ExpressionAp *ap, Module &m, StgIRBuilder &builder,
                    BuildCtx &bctx) {
-    BasicBlock *insertBB = builder.GetInsertBlock();
     for (Atom *p : ap->params_reverse_range()) {
         Value *v = materializeAtom(p, builder, bctx);
         if (!isa<AtomInt>(p)) {
@@ -633,8 +632,6 @@ void materializeAp(const ExpressionAp *ap, Module &m, StgIRBuilder &builder,
     Value *V = bctx.getIdentifier(ap->getFnName()).v;
     materializeEnterDynamicClosure(V, m, builder, bctx);
 
-    builder.SetInsertPoint(insertBB);
-    builder.CreateRetVoid();
 };
 
 void materializeConstructor(const ExpressionConstructor *c, Module &m,
@@ -683,8 +680,6 @@ void materializeConstructor(const ExpressionConstructor *c, Module &m,
     // we need to use enterDynamicClosure because we create closures for our return alts as well.
     ReturnCont = TransmuteToInt(ReturnCont, builder);
     builder.CreateCall(bctx.enterDynamicClosure, ReturnCont);
-    //CreateTailCall(builder, ReturnCont, {});
-    builder.CreateRetVoid();
 };
 
 // materialize destructure code for an alt over a constructor.
@@ -785,7 +780,6 @@ Function *materializeCaseConstructorReturnFrame(const ExpressionCase *c,
         assert(freeVarsInAlts.size() == 0 && "unhandled.");
         const CaseAltDefault *default_ = cast<CaseAltDefault>(*c->alts_begin());
         materializeExpr(default_->getRHS(), m, builder, bctx);
-        builder.CreateRetVoid();
         return f;
     }
 
@@ -853,6 +847,7 @@ Function *materializeCaseConstructorReturnFrame(const ExpressionCase *c,
                 switch_->addCase(builder.getInt64(Tag), bb);
                 materializeCaseConstructorAltDestructure(c, d, MemAddr, m,
                                                          builder, bctx);
+                builder.CreateRetVoid();
                 break;
             }
             case CaseAlt::CAK_Int:
@@ -875,6 +870,7 @@ Function *materializeCaseConstructorReturnFrame(const ExpressionCase *c,
                 bctx.insertIdentifier(altVariable->getLHS(),
                                       LLVMValueData(raw, ty));
                 materializeExpr(altVariable->getRHS(), m, builder, bctx);
+                builder.CreateRetVoid();
 
                 break;
             }
@@ -960,7 +956,7 @@ Function *materializePrimitiveCaseReturnFrame(const ExpressionCase *c,
                 materializeExpr(ci->getRHS(), m, builder, bctx);
                 // create ret void.
                 builder.SetInsertPoint(BB);
-                // builder.CreateRetVoid();
+                builder.CreateRetVoid();
                 break;
             }
         }
@@ -986,6 +982,7 @@ Function *materializePrimitiveCaseReturnFrame(const ExpressionCase *c,
                               LLVMValueData::createPrimInt(scrutinee));
         materializeExpr(cv->getRHS(), m, builder, bctx);
         // create ret void.
+        builder.CreateRetVoid();
 
     } else {
         builder.SetInsertPoint(defaultBB);
@@ -1167,9 +1164,9 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
     materializeExpr(scrutinee, m, builder, bctx);
 
     // clean this up, I should need this epilogue for materializeExpr in the other case as well :(.
-    if(bctx.isPrimIntTy(scrutineety)) {
-        builder.CreateRetVoid();
-    }
+    // if(bctx.isPrimIntTy(scrutineety)) {
+    //     builder.CreateRetVoid();
+    // }
 }
 
 // *** LET CODEGEN
@@ -1251,6 +1248,7 @@ Function *_materializeDynamicLetBinding(const Binding *b, Module &m,
         i++;
     }
     materializeLambda(b->getRhs(), m, builder, bctx);
+    builder.CreateRetVoid();
     return F;
 }
 
@@ -1385,7 +1383,7 @@ LLVMClosureData materializeTopLevelStaticBinding(const Binding *b, Module &m,
     BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
     builder.SetInsertPoint(entry);
     materializeLambda(b->getRhs(), m, builder, bctx);
-    // builder.CreateRetVoid();
+    builder.CreateRetVoid();
 
     return materializeStaticClosureForFn(F, b->getName() + "_closure", m,
                                          builder, bctx);
