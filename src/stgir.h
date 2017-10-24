@@ -114,6 +114,50 @@ class DataType {
     }
 };
 
+
+    class TypeRaw {
+    public:
+        enum TypeKind { TK_Data, TK_Function };
+        TypeKind getKind() const { return kind; }
+        void print(std::ostream &os) const;
+        void dump() { print(std::cerr); }
+    protected:
+        TypeRaw(TypeKind kind) : kind(kind) {};
+        TypeKind kind;
+
+    };
+
+    class DataTypeRaw : public TypeRaw {
+    private:
+        TypeName name;
+    public:
+        DataTypeRaw(TypeName name) : name(name), TypeRaw(TK_Data) {};
+        static bool classof(const TypeRaw *T) { return T->getKind() == TypeRaw::TK_Data; }
+        TypeName getName() const { return name; }
+    };
+
+    class FunctionTypeRaw : public TypeRaw {
+    public:
+        using ParamNamesListTy = SmallVector<TypeName, 4>;
+        using const_iterator = ParamNamesListTy::const_iterator;
+    private:
+        TypeName returnname;
+        SmallVector<TypeName, 4> paramnames;
+    public:
+        FunctionTypeRaw(TypeName returnname, ArrayRef<TypeName> paramnamesref) : returnname(returnname), TypeRaw(TK_Function) {
+            for(TypeName name : paramnamesref) paramnames.push_back(name);
+
+        }
+        static bool classof(const TypeRaw *T) { return T->getKind() == TypeRaw::TK_Function; }
+        void print(std::ostream &os) const;
+
+        iterator_range<const_iterator> params_range() const {
+          return iterator_range<const_iterator>(paramnames.begin(), paramnames.end());
+        }
+
+        TypeName getReturnTypeName() const { return returnname; }
+    };
+
 // *** Atom ***
 class Atom {
    public:
@@ -466,14 +510,14 @@ class ExpressionCase : public Expression {
 // *** Parameter ***
 class Parameter {
     Identifier name;
-    TypeName type;
+    TypeRaw *type;
 
    public:
-    Parameter(Identifier name, TypeName type) : name(name), type(type){};
+    Parameter(Identifier name, TypeRaw *type) : name(name), type(type){};
     void print(std::ostream &os) const;
     friend std::ostream &operator<<(std::ostream &os, const Parameter &p);
 
-    TypeName getTypeName() const { return type; }
+    const TypeRaw* getTypeRaw() const { return type; }
     Identifier getName() const { return name; }
 };
 

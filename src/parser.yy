@@ -59,6 +59,7 @@ void add_data_constructor_to_list(DataConstructor *b) {
 
 %union{
   std::vector<Atom *> *atomslist;
+  std::vector<TypeName> *typeslist;
   stg::Atom *atom;
   stg::CaseAlt *alt;
   stg::Expression *expr;
@@ -68,6 +69,7 @@ void add_data_constructor_to_list(DataConstructor *b) {
   stg::Parameter *param;
   stg::DataConstructor *dataconstructor;
   std::string *constructorName;
+  stg::TypeRaw *typeraw;
 
   bool UNDEF;
 }
@@ -103,6 +105,7 @@ void add_data_constructor_to_list(DataConstructor *b) {
 %type <atom> atom
 %type <datatype> datatype
 %type <dataconstructor> dataconstructor
+%type <typeraw> typeraw
 
 %type <UNDEF> altlist;
 %type <alt> alt;
@@ -113,6 +116,10 @@ void add_data_constructor_to_list(DataConstructor *b) {
 
 %type <atomslist> atoms_;
 %type <atomslist> atomlist;
+
+
+%type <typeslist> typeslist_;
+%type <typeslist> typeslist;
 
 %type <UNDEF> params;
 %type <param> param;
@@ -216,9 +223,31 @@ altdestructure:
       delete $1;
     }
 
+// types: either CONSTRUCTOR | RETTY(TYPES )
+typeraw: CONSTRUCTORNAME
+    {
+        $$ = new stg::DataTypeRaw(*$1);
+    }
+    |
+    CONSTRUCTORNAME typeslist {
+        $$ = new stg::FunctionTypeRaw(*$1, *$2);
+    }
+
+typeslist: OPENPAREN typeslist_ CLOSEPAREN | OPENPAREN CLOSEPAREN {
+    $$ = new std::vector<TypeName>();
+}
+
+typeslist_: typeslist_ CONSTRUCTORNAME {
+    $$ = $1;
+    $$->push_back(*$2);
+} | CONSTRUCTORNAME {
+    $$ = new std::vector<TypeName>();
+    $$->push_back(*$1);
+}
+
 // Parameters
 param:
-  ATOMSTRING COLON CONSTRUCTORNAME { $$ = new stg::Parameter(cast<AtomIdent>($1)->getIdent(), *$3)}
+  ATOMSTRING COLON typeraw { $$ = new stg::Parameter(cast<AtomIdent>($1)->getIdent(), $3)}
 
 params_:
   params_ param { add_param_to_list($2); }
