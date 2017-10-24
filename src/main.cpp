@@ -677,9 +677,13 @@ void materializeConstructor(const ExpressionConstructor *c, Module &m,
     builder.CreateCall(bctx.pushInt, {memAddr});
 
     // now pop a continuation off the return stack and invoke it
-    CallInst *ReturnCont =
+    Value *ReturnCont =
         builder.CreateCall(bctx.popReturnCont, {}, "returncont");
-    CreateTailCall(builder, ReturnCont, {});
+
+    // we need to use enterDynamicClosure because we create closures for our return alts as well.
+    ReturnCont = TransmuteToInt(ReturnCont, builder);
+    builder.CreateCall(bctx.enterDynamicClosure, ReturnCont);
+    //CreateTailCall(builder, ReturnCont, {});
     builder.CreateRetVoid();
 };
 
@@ -764,6 +768,7 @@ static const DataType *getCommonDataTypeFromAlts(const ExpressionCase *c,
 
 // materialize alternate handling of case `ident` of ...)
 Function *materializeCaseConstructorReturnFrame(const ExpressionCase *c,
+                                                const std::vector<Identifier> freeVarsInAlts,
                                                 Module &m, StgIRBuilder builder,
                                                 BuildCtx &bctx) {
 
@@ -777,11 +782,40 @@ Function *materializeCaseConstructorReturnFrame(const ExpressionCase *c,
 
     // HACK: special case for case x of { default -> ... }
     if (c->alts_size() == 1 && isa<CaseAltDefault>(*(c->alts_begin()))) {
+        assert(freeVarsInAlts.size() == 0 && "unhandled.");
         const CaseAltDefault *default_ = cast<CaseAltDefault>(*c->alts_begin());
         materializeExpr(default_->getRHS(), m, builder, bctx);
         builder.CreateRetVoid();
         return f;
     }
+
+    // **** COPY PASTE BEGIN
+    // here is code duplication in some sense with materializeDynamicLetBinding
+    // Open a new scope.
+    BuildCtx::Scoper s(bctx);
+    if (freeVarsInAlts.size() > 0) {
+        Value *closureAddr =
+                builder.CreateLoad(bctx.enteringClosureAddr,
+                                   "closure_addr_int");
+        Value *closure = builder.CreateIntToPtr(
+                closureAddr,
+                bctx.ClosureTy[freeVarsInAlts.size()]->getPointerTo(),
+                "closure_typed");
+        int i = 0;
+        for (Identifier id : freeVarsInAlts) {
+            errs() << __FUNCTION__ << " | i:" << i<< " |id:" << id << "\n";
+            Value *v = builder.CreateGEP(
+                    closure,
+                    {builder.getInt64(0), builder.getInt32(1),
+                     builder.getInt32(i)},
+                    id + "_free_param_slot");
+            v = builder.CreateLoad(v, id);
+            const DataType *ty = bctx.getIdentifier(id).stgtype;
+            bctx.insertIdentifier(id, LLVMValueData(v, ty));
+            i++;
+        }
+    }
+    // **** COPY PASTE END
 
     Value *MemAddr = builder.CreateCall(bctx.popInt, {}, "memaddr");
 
@@ -797,7 +831,6 @@ Function *materializeCaseConstructorReturnFrame(const ExpressionCase *c,
         m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
     builder.CreateCall(trap, {});
     builder.CreateRetVoid();
-    // builder.CreateUnreachable();
 
     builder.SetInsertPoint(entry);
     SwitchInst *switch_ =
@@ -826,7 +859,6 @@ Function *materializeCaseConstructorReturnFrame(const ExpressionCase *c,
                 assert(false && "case of a non-int scrutinee cannot have int");
                 break;
             case CaseAlt::CAK_Variable: {
-                assert(false && "unimplemented");
                 CaseAltVariable *altVariable = cast<CaseAltVariable>(a);
                 BasicBlock *bb = BasicBlock::Create(m.getContext(),
                                                     altVariable->getLHS(), f);
@@ -1020,12 +1052,12 @@ std::set<Identifier> getFreeVarsInExpression(const Expression *e, iterator_range
         case Expression::EK_Case: {
             const ExpressionCase *c = cast<ExpressionCase>(e);
             // HACK: do not consider scrutinee as free. This is a HACK -_-"
-            cerr << "HACK: right now, we do not consider the scrutinee as "
-                    "free. This is a hack because I have more interesting "
-                    "things I want to try\n";
+            //cerr << "HACK: right now, we do not consider the scrutinee as "
+            //        "free. This is a hack because I have more interesting "
+            //        "things I want to try\n";
             // Add the free vars in the scrutinee into the freeVars list.
-            // const std::set<Identifier> scrutineeFree(getFreeVarsInExpression(c->getScrutinee(), staticBindingsRange));
-            // freeVars.insert(scrutineeFree.begin(), scrutineeFree.end());
+            const std::set<Identifier> scrutineeFree(getFreeVarsInExpression(c->getScrutinee(), staticBindingsRange));
+            freeVars.insert(scrutineeFree.begin(), scrutineeFree.end());
 
             for(const CaseAlt *alt : c->alts_range()) {
                 // The LHS of a case alt contains bindings that are bound throughout the alt subexpression.
@@ -1053,10 +1085,6 @@ std::set<Identifier> getFreeVarsInExpression(const Expression *e, iterator_range
 // Get the names of the variables that are feshly bound by an alt.
 // The names that are bound by an alt come from the LHS of the alt.
 std::set<Identifier> getIdentifiersInAltLHS(const CaseAlt *alt) {
-    auto extractIdentfierFromAtom = [](std::set<Identifier> &s, const Atom *a) {
-        if (const AtomIdent *id = dyn_cast<AtomIdent>(a))
-            s.insert(id->getIdent());
-    };
     switch (alt->getKind()) {
         case CaseAlt::CAK_Default:
             return {};
@@ -1100,47 +1128,47 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
     const Expression *scrutinee = c->getScrutinee();
     const DataType *scrutineety = getTypeOfExpression(scrutinee, bctx);
 
-    if (bctx.isPrimIntTy(scrutineety)) {
-        Function *continuation =
-            materializePrimitiveCaseReturnFrame(c, freeVarsInAlts, m, builder, bctx);
-        Value *clsRaw = builder.CreateCall(
+    Function *continuation = [&] {
+        if (bctx.isPrimIntTy(scrutineety)) {
+            return materializePrimitiveCaseReturnFrame(c, freeVarsInAlts, m,
+                                                       builder, bctx);
+        } else {
+            return materializeCaseConstructorReturnFrame(c, freeVarsInAlts, m,
+                                                         builder, bctx);
+        }
+    }();
+
+    Value *clsRaw = builder.CreateCall(
             bctx.malloc,
             {builder.getInt64(
-                m.getDataLayout().getTypeAllocSize(bctx.ClosureTy[freeVarsInAlts.size()]))},
+                    m.getDataLayout().getTypeAllocSize(bctx.ClosureTy[freeVarsInAlts.size()]))},
             "closure_raw");
-        Value *clsTyped = builder.CreateBitCast(
+    Value *clsTyped = builder.CreateBitCast(
             clsRaw, bctx.ClosureTy[freeVarsInAlts.size()]->getPointerTo(), "closure_typed");
-        Value *fnSlot = builder.CreateGEP(
+    Value *fnSlot = builder.CreateGEP(
             clsTyped, {builder.getInt64(0), builder.getInt32(0)}, "fn_slot");
-        builder.CreateStore(continuation, fnSlot);
+    builder.CreateStore(continuation, fnSlot);
 
-        // store free vars into the slot.
-        int i = 0;
-        for(Identifier freeVar: freeVarsInAlts) {
-            Value *freeVarSlot = builder.CreateGEP(clsTyped, {builder.getInt64(0), builder.getInt32(1), builder.getInt32(i)}, freeVar + "_free_in_case_slot");
-            Value *freeVarVal = bctx.getIdentifier(freeVar).v;
-            freeVarVal = TransmuteToInt(freeVarVal, builder);
-            builder.CreateStore(freeVarVal, freeVarSlot);
-            i++;
-        }
+    // store free vars into the slot.
+    int i = 0;
+    for(Identifier freeVar: freeVarsInAlts) {
+        Value *freeVarSlot = builder.CreateGEP(clsTyped, {builder.getInt64(0), builder.getInt32(1), builder.getInt32(i)}, freeVar + "_free_in_case_slot");
+        Value *freeVarVal = bctx.getIdentifier(freeVar).v;
+        freeVarVal = TransmuteToInt(freeVarVal, builder);
+        builder.CreateStore(freeVarVal, freeVarSlot);
+        i++;
+    }
 
-        Value *clsAsContHack = builder.CreateBitCast(
+    Value *clsAsContHack = builder.CreateBitCast(
             clsTyped, bctx.ContTy->getPointerTo(),
             "closure_as_cont_omg_this_is_a_hack_change_type_of_return_stack");
 
-        builder.CreateCall(bctx.pushReturnCont, {clsAsContHack});
-        materializeExpr(scrutinee, m, builder, bctx);
+    builder.CreateCall(bctx.pushReturnCont, {clsAsContHack});
+    materializeExpr(scrutinee, m, builder, bctx);
+
+    // clean this up, I should need this epilogue for materializeExpr in the other case as well :(.
+    if(bctx.isPrimIntTy(scrutineety)) {
         builder.CreateRetVoid();
-    } else {
-        // I don't care about free variables in this case right now.
-        if (freeVarsInAlts.size() > 0) {
-            assert(freeVarsInAlts.size() == 0 &&
-                   "have case with free variables, cannot codegen!");
-        }
-        Function *continuation =
-            materializeCaseConstructorReturnFrame(c, m, builder, bctx);
-        builder.CreateCall(bctx.pushReturnCont, {continuation});
-        materializeExpr(scrutinee, m, builder, bctx);
     }
 }
 
