@@ -1511,7 +1511,8 @@ StructType *materializeDataConstructor(const DataType *decl,
                                        const BuildCtx &bctx) {
     std::vector<Type *> Elements;
     Elements.push_back(builder.getInt64Ty());  // TAG.
-    for (TypeName *____ : b->types_range()) {
+    for (TypeName *ty : b->types_range()) {
+        errs() << "type: " << *ty << "\n";
         // HACK:
         Elements.push_back(builder.getInt64Ty());
         // Elements.push_back(bctx.getTypeFromName(*Name));
@@ -1520,6 +1521,8 @@ StructType *materializeDataConstructor(const DataType *decl,
     StructType *Ty =
         StructType::create(m.getContext(), Elements,
                            decl->getTypeName() + "_variant_" + b->getName());
+
+    errs() << "StructType: " << *Ty << "\n";
     return Ty;
 };
 
@@ -1528,6 +1531,12 @@ int compile_program(stg::Program *program, int argc, char **argv) {
     static StgIRBuilder builder(ctx);
 
     Module *m = new Module("Module", ctx);
+
+    cerr << "----\n";
+    cerr << "Program: ";
+    cerr << *program << "\n";
+    cerr << "----\n";
+
     BuildCtx bctx(*m, builder);
     Binding *entrystg = nullptr;
     for (DataType *datatype : program->datatypes_range()) {
@@ -1553,7 +1562,7 @@ int compile_program(stg::Program *program, int argc, char **argv) {
 
     if (verifyModule(*m, nullptr) == 1) {
         cerr << "-----\n";
-        cerr << "Module:\b";
+        cerr << "Module:\n";
         errs() << *m << "\n";
         cerr << "-----\n";
         cerr << " *** Broken module found, aborting compilation.\nError:\n";

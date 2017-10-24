@@ -4,7 +4,7 @@
 data Int  = IntCons (PrimInt);
 
 
-binding mult = \(int_i: Int, int_j: Int) -> Int {
+binding mult = \(int_i: () -> Int, int_j: () -> Int) -> Int {
     case int_i () of
         IntCons (iprim) -> case int_j () of
                                 IntCons(jprim) -> case primMultiply (iprim jprim) of

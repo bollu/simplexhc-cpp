@@ -5,17 +5,13 @@ data IntTy = IntCons (PrimInt);
 
 binding intcons = \() -> IntTy { IntCons (2) };
 
-binding id = \(idxparam: IntTy) -> IntTy {     
+binding id = \(idxparam: () -> IntTy) -> IntTy {     
     case idxparam () of
         IntCons (x) -> IntCons (x);
 };
 
-binding extractIntWrapped = \(int_wrapped:IntTy) -> PrimInt {
-    case int_wrapped () of
-        IntCons (x) -> x (); 
-};
 
-binding compose = \(f:Boxed g:Boxed x:Boxed) -> Boxed {
+binding compose = \(f:(Boxed) -> Boxed g:(Boxed) -> Boxed x:(Boxed) -> Boxed) -> Boxed {
     let 
         binding gx = \(g:Boxed x:Boxed) () -> Boxed { g (x) };
     in f (gx)

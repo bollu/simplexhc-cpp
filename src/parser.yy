@@ -118,8 +118,8 @@ void add_data_constructor_to_list(DataConstructor *b) {
 %type <atomslist> atomlist;
 
 
-%type <typeslist> typeslist_;
-%type <typeslist> typeslist;
+%type <typeslist> typeraw_typeslist_;
+%type <typeslist> typeraw_typeslist;
 
 %type <UNDEF> params;
 %type <param> param;
@@ -137,14 +137,14 @@ binding:
 
 
 // Data declaration
-typeslist_:
-  typeslist_ CONSTRUCTORNAME { g_types.push_back($2); }
+datacons_typeslist_:
+  datacons_typeslist_ CONSTRUCTORNAME { g_types.push_back($2); }
   | CONSTRUCTORNAME { g_types.push_back($1); }
-typeslist: OPENPAREN CLOSEPAREN | OPENPAREN typeslist_ CLOSEPAREN
+datacons_typeslist: OPENPAREN CLOSEPAREN | OPENPAREN datacons_typeslist_ CLOSEPAREN
 
 
 dataconstructor:
-  CONSTRUCTORNAME typeslist { 
+  CONSTRUCTORNAME datacons_typeslist {
     $$ = new stg::DataConstructor(*$1, g_types);
     g_types.clear();
   }
@@ -229,18 +229,22 @@ typeraw: CONSTRUCTORNAME
         $$ = new stg::DataTypeRaw(*$1);
     }
     |
-    CONSTRUCTORNAME typeslist {
-        $$ = new stg::FunctionTypeRaw(*$1, *$2);
+    typeraw_typeslist THINARROW CONSTRUCTORNAME {
+        $$ = new stg::FunctionTypeRaw(*$3, *$1);
+    }
+    |
+    OPENPAREN CLOSEPAREN THINARROW CONSTRUCTORNAME {
+        $$ = new stg::FunctionTypeRaw(*$4, {});
     }
 
-typeslist: OPENPAREN typeslist_ CLOSEPAREN | OPENPAREN CLOSEPAREN {
-    $$ = new std::vector<TypeName>();
+typeraw_typeslist: OPENPAREN typeraw_typeslist_ {
+    $$ = $2;
 }
 
-typeslist_: typeslist_ CONSTRUCTORNAME {
-    $$ = $1;
-    $$->push_back(*$2);
-} | CONSTRUCTORNAME {
+typeraw_typeslist_: CONSTRUCTORNAME typeraw_typeslist_  {
+    $$ = $2;
+    $$->push_back(*$1);
+} | CONSTRUCTORNAME CLOSEPAREN {
     $$ = new std::vector<TypeName>();
     $$->push_back(*$1);
 }

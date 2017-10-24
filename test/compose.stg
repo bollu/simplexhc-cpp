@@ -6,16 +6,16 @@ data IntTy = IntCons (PrimInt);
 
 binding int_2_cons = \() -> Int2Ty { Int2Cons (2 3) };
 
-binding swap = \(x_swap:Int2Ty) -> Int2Ty {
+binding swap = \(x_swap: () -> Int2Ty) -> Int2Ty {
     case x_swap () of
         Int2Cons (x y) -> Int2Cons (y x); };
 
-binding extractIntWrapped = \(x_int_wrapped:Int2Ty) -> IntTy { 
+binding extractIntWrapped = \(x_int_wrapped: () -> Int2Ty) -> IntTy { 
     case x_int_wrapped () of
         Int2Cons (x y) -> IntCons (x); 
 };
 
-binding compose = \(f:Boxed g:Boxed x:Boxed) -> Boxed { 
+binding compose = \(f: (Boxed) -> Boxed g:(Boxed) -> Boxed x:(Boxed) -> Boxed) -> Boxed { 
     let 
         binding gx = \(g:Boxed x:Boxed) () -> Boxed { g (x) };
     in f (gx)
