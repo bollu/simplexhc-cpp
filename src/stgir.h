@@ -114,49 +114,56 @@ class DataType {
     }
 };
 
+class TypeRaw {
+   public:
+    enum TypeKind { TK_Data, TK_Function };
+    TypeKind getKind() const { return kind; }
+    void print(std::ostream &os) const;
+    void dump() { print(std::cerr); }
 
-    class TypeRaw {
-    public:
-        enum TypeKind { TK_Data, TK_Function };
-        TypeKind getKind() const { return kind; }
-        void print(std::ostream &os) const;
-        void dump() { print(std::cerr); }
-    protected:
-        TypeRaw(TypeKind kind) : kind(kind) {};
-        TypeKind kind;
+   protected:
+    TypeRaw(TypeKind kind) : kind(kind){};
+    TypeKind kind;
+};
 
-    };
+class DataTypeRaw : public TypeRaw {
+   private:
+    TypeName name;
 
-    class DataTypeRaw : public TypeRaw {
-    private:
-        TypeName name;
-    public:
-        DataTypeRaw(TypeName name) : TypeRaw(TK_Data), name(name) {};
-        static bool classof(const TypeRaw *T) { return T->getKind() == TypeRaw::TK_Data; }
-        TypeName getName() const { return name; }
-    };
+   public:
+    DataTypeRaw(TypeName name) : TypeRaw(TK_Data), name(name){};
+    static bool classof(const TypeRaw *T) {
+        return T->getKind() == TypeRaw::TK_Data;
+    }
+    TypeName getName() const { return name; }
+};
 
-    class FunctionTypeRaw : public TypeRaw {
-    public:
-        using ParamNamesListTy = SmallVector<TypeName, 4>;
-        using const_iterator = ParamNamesListTy::const_iterator;
-    private:
-        TypeName returnname;
-        SmallVector<TypeName, 4> paramnames;
-    public:
-        FunctionTypeRaw(TypeName returnname, ArrayRef<TypeName> paramnamesref) : TypeRaw(TK_Function), returnname(returnname){
-            for(TypeName name : paramnamesref) paramnames.push_back(name);
+class FunctionTypeRaw : public TypeRaw {
+   public:
+    using ParamNamesListTy = SmallVector<TypeName, 4>;
+    using const_iterator = ParamNamesListTy::const_iterator;
 
-        }
-        static bool classof(const TypeRaw *T) { return T->getKind() == TypeRaw::TK_Function; }
-        void print(std::ostream &os) const;
+   private:
+    TypeName returnname;
+    SmallVector<TypeName, 4> paramnames;
 
-        iterator_range<const_iterator> params_range() const {
-          return iterator_range<const_iterator>(paramnames.begin(), paramnames.end());
-        }
+   public:
+    FunctionTypeRaw(TypeName returnname, ArrayRef<TypeName> paramnamesref)
+        : TypeRaw(TK_Function), returnname(returnname) {
+        for (TypeName name : paramnamesref) paramnames.push_back(name);
+    }
+    static bool classof(const TypeRaw *T) {
+        return T->getKind() == TypeRaw::TK_Function;
+    }
+    void print(std::ostream &os) const;
 
-        TypeName getReturnTypeName() const { return returnname; }
-    };
+    iterator_range<const_iterator> params_range() const {
+        return iterator_range<const_iterator>(paramnames.begin(),
+                                              paramnames.end());
+    }
+
+    TypeName getReturnTypeName() const { return returnname; }
+};
 
 // *** Atom ***
 class Atom {
@@ -324,21 +331,21 @@ class ExpressionLet : public Expression {
         return E->getKind() == Expression::EK_Let;
     }
 };
-    class ExpressionIntLiteral : public Expression {
-    private:
-        int value;
-    public:
-      ExpressionIntLiteral(int value)
-          : Expression(Expression::EK_IntLiteral), value(value) {}
+class ExpressionIntLiteral : public Expression {
+   private:
+    int value;
 
-      int getValue() const { return value; }
+   public:
+    ExpressionIntLiteral(int value)
+        : Expression(Expression::EK_IntLiteral), value(value) {}
 
-        static bool classof(const Expression *E) {
-          return E->getKind() == Expression::EK_IntLiteral;
-        }
-        void print(std::ostream &os) const;
-    };
+    int getValue() const { return value; }
 
+    static bool classof(const Expression *E) {
+        return E->getKind() == Expression::EK_IntLiteral;
+    }
+    void print(std::ostream &os) const;
+};
 
 // *** Alt ***
 class CaseAlt {
@@ -370,9 +377,7 @@ class CaseAltInt : public CaseAlt {
         return a->getKind() == CaseAlt::CAK_Int;
     }
 
-    int getLHS() const {
-        return lhs->getVal();
-    }
+    int getLHS() const { return lhs->getVal(); }
 
     void print(std::ostream &os) const;
 };
@@ -451,7 +456,8 @@ class ExpressionCase : public Expression {
         bool hasDefaultAlt = false;
         for (const CaseAlt *alt : this->alts) {
             if (isa<CaseAltDefault>(alt)) {
-                assert(!hasDefaultAlt && "Case expression has multiple default alts!");
+                assert(!hasDefaultAlt &&
+                       "Case expression has multiple default alts!");
                 hasDefaultAlt = true;
             }
         }
@@ -459,15 +465,17 @@ class ExpressionCase : public Expression {
         bool hasVariableAlt = false;
         for (const CaseAlt *alt : this->alts) {
             if (isa<CaseAltVariable>(alt)) {
-                assert(!hasVariableAlt && "Case expression has multiple variable alts!");
+                assert(!hasVariableAlt &&
+                       "Case expression has multiple variable alts!");
                 hasVariableAlt = true;
             }
         }
 
         if (hasDefaultAlt && hasVariableAlt) {
-            assert(false && "case has *both* default *and* variable alt, cannot compile!");
+            assert(
+                false &&
+                "case has *both* default *and* variable alt, cannot compile!");
         }
-
     }
 
     void print(std::ostream &os) const;
@@ -488,8 +496,8 @@ class ExpressionCase : public Expression {
         return make_range(alts_begin(), alts_end());
     }
 
-    const CaseAltDefault *getDefaultAlt()  const {
-        for (const CaseAlt* alt : this->alts) {
+    const CaseAltDefault *getDefaultAlt() const {
+        for (const CaseAlt *alt : this->alts) {
             if (const CaseAltDefault *d = dyn_cast<CaseAltDefault>(alt)) {
                 return d;
             }
@@ -497,8 +505,8 @@ class ExpressionCase : public Expression {
         return nullptr;
     }
 
-    const CaseAltVariable *getVariableAlt()  const {
-        for (const CaseAlt* alt : this->alts) {
+    const CaseAltVariable *getVariableAlt() const {
+        for (const CaseAlt *alt : this->alts) {
             if (const CaseAltVariable *v = dyn_cast<CaseAltVariable>(alt)) {
                 return v;
             }
@@ -517,7 +525,7 @@ class Parameter {
     void print(std::ostream &os) const;
     friend std::ostream &operator<<(std::ostream &os, const Parameter &p);
 
-    const TypeRaw* getTypeRaw() const { return type; }
+    const TypeRaw *getTypeRaw() const { return type; }
     Identifier getName() const { return name; }
 };
 
@@ -576,15 +584,13 @@ class Lambda {
         return make_range(free_params_begin(), free_params_end());
     }
 
-    ArrayRef<const Parameter *>free_params_ref() const { return freeparams; }
+    ArrayRef<const Parameter *> free_params_ref() const { return freeparams; }
 
     iterator_range<const_reverse_iterator> free_params_reverse_range() const {
         return make_range(free_params_end(), free_params_begin());
     }
 
-    std::string getReturnTypeName() const {
-        return this->returnType;
-    }
+    std::string getReturnTypeName() const { return this->returnType; }
 };
 
 // *** Binding ***

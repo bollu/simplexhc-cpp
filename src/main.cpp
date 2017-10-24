@@ -25,22 +25,26 @@ using namespace llvm;
 class BuildCtx;
 
 class StgType {
-public:
+   public:
     enum StgTypeKind { STK_Data, STK_Function };
     StgTypeKind getKind() const { return kind; }
     virtual std::string getTypeName() const = 0;
     virtual void dump() const { cout << getTypeName(); }
-private:
+
+   private:
     StgTypeKind kind;
-protected:
-    StgType(StgTypeKind kind) : kind(kind) {};
+
+   protected:
+    StgType(StgTypeKind kind) : kind(kind){};
 };
 
 class StgDataType : public StgType {
-private:
+   private:
     const DataType *datatype;
-public:
-    explicit StgDataType(const DataType *datatype) : datatype(datatype), StgType(StgType::STK_Data){};
+
+   public:
+    explicit StgDataType(const DataType *datatype)
+        : datatype(datatype), StgType(StgType::STK_Data){};
     const DataType *getDataType() const { return datatype; };
 
     std::string getTypeName() const { return datatype->getTypeName(); }
@@ -49,15 +53,15 @@ public:
 };
 
 class StgFunctionType : public StgType {
-private:
+   private:
     const StgType *returnType;
     SmallVector<const StgType *, 4> paramTypes;
 
-public:
-    StgFunctionType(const StgType *returnType, ArrayRef<const StgType *> paramTypesref) : StgType(StgType::STK_Function),
-                                                                                          returnType (returnType) {
-        for (const StgType *ty : paramTypesref)
-            paramTypes.push_back(ty);
+   public:
+    StgFunctionType(const StgType *returnType,
+                    ArrayRef<const StgType *> paramTypesref)
+        : StgType(StgType::STK_Function), returnType(returnType) {
+        for (const StgType *ty : paramTypesref) paramTypes.push_back(ty);
     }
 
     const StgType *getReturnType() const { return returnType; }
@@ -73,7 +77,9 @@ public:
         }
         return outs.str();
     }
-    static bool classof(const StgType *ty) { return ty->getKind() == STK_Function; }
+    static bool classof(const StgType *ty) {
+        return ty->getKind() == STK_Function;
+    }
 };
 
 using StgIRBuilder = IRBuilder<>;
@@ -81,10 +87,11 @@ using StgIRBuilder = IRBuilder<>;
 void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
                      BuildCtx &bctx);
 
-std::set<Identifier> getFreeVarsInCase(const ExpressionCase *c, const BuildCtx &bctx);
+std::set<Identifier> getFreeVarsInCase(const ExpressionCase *c,
+                                       const BuildCtx &bctx);
 
 static const StgType *getTypeOfExpression(const Expression *e,
-                                           const BuildCtx &bctx);
+                                          const BuildCtx &bctx);
 
 void materializeEnterInt(Value *v, std::string contName, Module &m,
                          StgIRBuilder &builder, BuildCtx &bctx);
@@ -139,7 +146,6 @@ static AssertingVH<Function> createNewFunction(Module &m, FunctionType *FTy,
 
     return Function::Create(FTy, GlobalValue::ExternalLinkage, name, &m);
 }
-
 
 static Value *TransmuteToInt(Value *V, StgIRBuilder &builder) {
     if (V->getType()->isIntegerTy()) return V;
@@ -312,8 +318,8 @@ class BuildCtx {
                  stackReturnContTop);
 
         // *** Heap ***
-        addStack(m, builder, getRawMemTy(builder), "Boxed", STACK_SIZE, pushBoxed,
-                 popBoxed, stackBoxed, stackBoxedTop);
+        addStack(m, builder, getRawMemTy(builder), "Boxed", STACK_SIZE,
+                 pushBoxed, popBoxed, stackBoxed, stackBoxedTop);
 
         // *** enteringClosureAddr ***
         enteringClosureAddr = new GlobalVariable(
@@ -344,15 +350,20 @@ class BuildCtx {
             return new LLVMClosureData(materializeStaticClosureForFn(
                 F, "closure_printInt", m, builder, *this));
         }();
-        this->insertTopLevelBinding("printInt", new StgFunctionType(this->boxedTy, {this->primIntTy}), *printInt);
-
+        this->insertTopLevelBinding(
+            "printInt", new StgFunctionType(this->boxedTy, {this->primIntTy}),
+            *printInt);
 
         // *** enter dynamic closure ***
         enterDynamicClosure = addEnterDynamicClosureToModule(m, builder, *this);
 
         // *** primMultiply *** //
         primMultiply = addPrimMultiplyToModule(m, builder, *this);
-        this->insertTopLevelBinding("primMultiply", new StgFunctionType(this->primIntTy, {this->primIntTy, this->primIntTy}), *primMultiply);
+        this->insertTopLevelBinding(
+            "primMultiply",
+            new StgFunctionType(this->primIntTy,
+                                {this->primIntTy, this->primIntTy}),
+            *primMultiply);
     }
 
     ~BuildCtx() {
@@ -368,7 +379,8 @@ class BuildCtx {
     const StgDataType *getPrimIntTy() const { return this->primIntTy; }
 
     // map a binding to a function in the given scope.
-    void insertTopLevelBinding(std::string name, const StgType *returnTy, LLVMClosureData bdata) {
+    void insertTopLevelBinding(std::string name, const StgType *returnTy,
+                               LLVMClosureData bdata) {
         errs() << "name: " << name << "\n";
         assert(staticBindingMap.find(name) == staticBindingMap.end());
         errs() << "name: " << name << "\n\n";
@@ -378,7 +390,8 @@ class BuildCtx {
         identifiermap.insert(name, vdata);
     }
 
-    iterator_range<StaticBindingMapTy::const_iterator> getTopLevelBindings() const {
+    iterator_range<StaticBindingMapTy::const_iterator> getTopLevelBindings()
+        const {
         return make_range(staticBindingMap.begin(), staticBindingMap.end());
     }
 
@@ -430,13 +443,13 @@ class BuildCtx {
     }
 
     void insertType(std::string name, StgType *datatype) {
-        assert(dataTypeMap.find(name) == dataTypeMap.end() && "double inserting a datatype.");
+        assert(dataTypeMap.find(name) == dataTypeMap.end() &&
+               "double inserting a datatype.");
         dataTypeMap[name] = datatype;
     }
 
-
     const StgType *getTypeFromRawType(const TypeRaw *tyraw) const {
-        switch(tyraw->getKind()) {
+        switch (tyraw->getKind()) {
             case TypeRaw::TK_Data: {
                 const DataTypeRaw *dt = cast<DataTypeRaw>(tyraw);
                 return getTypeFromName(dt->getName());
@@ -445,7 +458,7 @@ class BuildCtx {
                 const FunctionTypeRaw *ft = cast<FunctionTypeRaw>(tyraw);
                 const StgType *retty = getTypeFromName(ft->getReturnTypeName());
                 SmallVector<const StgType *, 4> paramtys;
-                for(TypeName n : ft->params_range()) {
+                for (TypeName n : ft->params_range()) {
                     paramtys.push_back(getTypeFromName(n));
                 }
                 return new StgFunctionType(retty, paramtys);
@@ -453,9 +466,8 @@ class BuildCtx {
         }
 
         report_fatal_error("should not reach here, bottom of switch");
-
     }
-   const StgType *getTypeFromName(std::string name) const {
+    const StgType *getTypeFromName(std::string name) const {
         auto It = dataTypeMap.find(name);
         if (It != dataTypeMap.end()) {
             return It->second;
@@ -468,7 +480,6 @@ class BuildCtx {
         errs() << "Unknown name for data type: " << name << "\n";
         assert(false && "unknown type name");
         report_fatal_error("unknown type name");
-
     }
 
     // Class to create and destroy a scope with RAII.
@@ -512,7 +523,8 @@ class BuildCtx {
         typemap["PrimInt"] = primIntTy;
 
         // Boxed
-        boxedTy = new StgDataType(new DataType("Boxed", {}));  // void has no constructors.
+        boxedTy = new StgDataType(
+            new DataType("Boxed", {}));  // void has no constructors.
         typemap["Boxed"] = boxedTy;
     }
 
@@ -610,7 +622,8 @@ class BuildCtx {
         // "cont_addr");
 
         // store the address of the closure we are entering
-        Value *closureAddr = builder.CreatePtrToInt(closureRaw, builder.getInt64Ty(), "closure_addr");
+        Value *closureAddr = builder.CreatePtrToInt(
+            closureRaw, builder.getInt64Ty(), "closure_addr");
         builder.CreateStore(closureAddr, bctx.enteringClosureAddr);
         // call the function
         builder.CreateCall(cont, {});
@@ -621,11 +634,11 @@ class BuildCtx {
     static LLVMClosureData *addPrimMultiplyToModule(Module &m,
                                                     StgIRBuilder builder,
                                                     BuildCtx &bctx) {
-        Function *F = createNewFunction(
-                m,
-                FunctionType::get(builder.getVoidTy(), {},
-                        /*varargs = */ false),
-                "primMultiply");
+        Function *F =
+            createNewFunction(m,
+                              FunctionType::get(builder.getVoidTy(), {},
+                                                /*varargs = */ false),
+                              "primMultiply");
         BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
         builder.SetInsertPoint(entry);
         Value *i = builder.CreateCall(bctx.popInt, {}, "i");
@@ -634,14 +647,13 @@ class BuildCtx {
 
         builder.CreateCall(bctx.pushInt, {result});
 
-
-        Value *RetFrame = builder.CreateCall(bctx.popReturnCont, {}, "return_frame");
+        Value *RetFrame =
+            builder.CreateCall(bctx.popReturnCont, {}, "return_frame");
         builder.CreateCall(bctx.enterDynamicClosure, RetFrame);
         builder.CreateRetVoid();
 
         return new LLVMClosureData(materializeStaticClosureForFn(
-                F, "closure_primMultiply", m, builder, bctx));
-
+            F, "closure_primMultiply", m, builder, bctx));
     }
 
     LLVMClosureData createPrimFunction(
@@ -700,27 +712,23 @@ void materializeAp(const ExpressionAp *ap, Module &m, StgIRBuilder &builder,
         Value *v = materializeAtom(p, builder, bctx);
         if (isa<AtomInt>(p)) {
             builder.CreateCall(bctx.pushInt, {v});
-        }
-        else {
-            LLVMValueData vdata = bctx.getIdentifier(cast<AtomIdent>(p)->getIdent());
+        } else {
+            LLVMValueData vdata =
+                bctx.getIdentifier(cast<AtomIdent>(p)->getIdent());
             if (vdata.stgtype == bctx.getPrimIntTy()) {
                 builder.CreateCall(bctx.pushInt, {v});
-            }
-            else {
+            } else {
                 v = builder.CreateBitCast(v, getRawMemTy(builder));
                 builder.CreateCall(bctx.pushBoxed, {v});
             }
-
         }
     }
     LLVMValueData vdata = bctx.getIdentifier(ap->getFnName());
     if (vdata.stgtype == bctx.getPrimIntTy()) {
         materializeEnterInt(vdata.v, ap->getFnName(), m, builder, bctx);
-    }
-    else {
+    } else {
         materializeEnterDynamicClosure(vdata.v, m, builder, bctx);
     };
-
 };
 
 void materializeConstructor(const ExpressionConstructor *c, Module &m,
@@ -764,7 +772,8 @@ void materializeConstructor(const ExpressionConstructor *c, Module &m,
     Value *ReturnCont =
         builder.CreateCall(bctx.popReturnCont, {}, "returncont");
 
-    // we need to use enterDynamicClosure because we create closures for our return alts as well.
+    // we need to use enterDynamicClosure because we create closures for our
+    // return alts as well.
     builder.CreateCall(bctx.enterDynamicClosure, ReturnCont);
 };
 
@@ -789,8 +798,8 @@ void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
     // a constructor will have a StructType. If not, this deserves
     StructType *DeclTy = cast<StructType>(T);
 
-    Value *StructPtr =
-        builder.CreateBitCast(rawmem, DeclTy->getPointerTo(), DeclTy->getName() +  "_structptr");
+    Value *StructPtr = builder.CreateBitCast(rawmem, DeclTy->getPointerTo(),
+                                             DeclTy->getName() + "_structptr");
 
     // Declaration and destructuring param sizes should match.
     assert(cons->types_size() == d->variables_size());
@@ -806,8 +815,10 @@ void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
             Value *V = builder.CreateLoad(Slot, "cons_" + std::to_string(i));
             bctx.insertIdentifier(var, LLVMValueData(V, bctx.getPrimIntTy()));
         } else {
-            Value *V = builder.CreateLoad(Slot, "cons_mem_as_int_" + std::to_string(i));
-            V = builder.CreateIntToPtr(V, getRawMemTy(builder), "cons_rawmem_" + std::to_string(i));
+            Value *V = builder.CreateLoad(
+                Slot, "cons_mem_as_int_" + std::to_string(i));
+            V = builder.CreateIntToPtr(V, getRawMemTy(builder),
+                                       "cons_rawmem_" + std::to_string(i));
             const StgType *Ty = bctx.getTypeFromName(cons->getTypeName(i));
             bctx.insertIdentifier(var, LLVMValueData(V, Ty));
         }
@@ -817,8 +828,8 @@ void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
 }
 
 static const StgType *getCommonDataTypeFromAlts(const ExpressionCase *c,
-                                                 const StgIRBuilder &builder,
-                                                 const BuildCtx &bctx) {
+                                                const StgIRBuilder &builder,
+                                                const BuildCtx &bctx) {
     const StgType *commondecl = nullptr;
     auto setCommonType = [&](const StgType *newdecl) -> void {
         if (commondecl == nullptr) {
@@ -849,11 +860,9 @@ static const StgType *getCommonDataTypeFromAlts(const ExpressionCase *c,
 };
 
 // materialize alternate handling of case `ident` of ...)
-Function *materializeCaseConstructorReturnFrame(const ExpressionCase *c,
-                                                const std::vector<Identifier> freeVarsInAlts,
-                                                Module &m, StgIRBuilder builder,
-                                                BuildCtx &bctx) {
-
+Function *materializeCaseConstructorReturnFrame(
+    const ExpressionCase *c, const std::vector<Identifier> freeVarsInAlts,
+    Module &m, StgIRBuilder builder, BuildCtx &bctx) {
     std::stringstream scrutineeNameSS;
     scrutineeNameSS << *c->getScrutinee();
     Function *f = createNewFunction(
@@ -876,20 +885,17 @@ Function *materializeCaseConstructorReturnFrame(const ExpressionCase *c,
     BuildCtx::Scoper s(bctx);
     if (freeVarsInAlts.size() > 0) {
         Value *closureAddr =
-                builder.CreateLoad(bctx.enteringClosureAddr,
-                                   "closure_addr_int");
+            builder.CreateLoad(bctx.enteringClosureAddr, "closure_addr_int");
         Value *closure = builder.CreateIntToPtr(
-                closureAddr,
-                bctx.ClosureTy[freeVarsInAlts.size()]->getPointerTo(),
-                "closure_typed");
+            closureAddr, bctx.ClosureTy[freeVarsInAlts.size()]->getPointerTo(),
+            "closure_typed");
         int i = 0;
         for (Identifier id : freeVarsInAlts) {
-            errs() << __FUNCTION__ << " | i:" << i<< " |id:" << id << "\n";
+            errs() << __FUNCTION__ << " | i:" << i << " |id:" << id << "\n";
             Value *v = builder.CreateGEP(
-                    closure,
-                    {builder.getInt64(0), builder.getInt32(1),
-                     builder.getInt32(i)},
-                    id + "_free_param_slot");
+                closure,
+                {builder.getInt64(0), builder.getInt32(1), builder.getInt32(i)},
+                id + "_free_param_slot");
             v = builder.CreateLoad(v, id);
             const StgType *ty = bctx.getIdentifier(id).stgtype;
             bctx.insertIdentifier(id, LLVMValueData(v, ty));
@@ -926,7 +932,9 @@ Function *materializeCaseConstructorReturnFrame(const ExpressionCase *c,
                 builder.SetInsertPoint(bb);
 
                 const DataType *dataType =
-                    cast<StgDataType>(getCommonDataTypeFromAlts(c, builder, bctx))->getDataType();
+                    cast<StgDataType>(
+                        getCommonDataTypeFromAlts(c, builder, bctx))
+                        ->getDataType();
                 const int Tag = dataType->getIndexForConstructor(std::get<0>(
                     bctx.getDataConstructorFromName(d->getConstructorName())));
                 // teach the switch case to switch to this BB on
@@ -951,8 +959,8 @@ Function *materializeCaseConstructorReturnFrame(const ExpressionCase *c,
                 switch_->setDefaultDest(bb);
                 Value *raw = builder.CreateCall(bctx.popInt, {},
                                                 altVariable->getLHS() + "_raw");
-                const StgType *ty = getTypeOfExpression(c->getScrutinee(),
-                                                         bctx);
+                const StgType *ty =
+                    getTypeOfExpression(c->getScrutinee(), bctx);
                 BuildCtx::Scoper s(bctx);
                 bctx.insertIdentifier(altVariable->getLHS(),
                                       LLVMValueData(raw, ty));
@@ -969,13 +977,11 @@ Function *materializeCaseConstructorReturnFrame(const ExpressionCase *c,
 }
 
 // Materialize a case over Prim int.
-Function *materializePrimitiveCaseReturnFrame(const ExpressionCase *c,
-                                              const std::vector<Identifier> freeVars,
-                                              Module &m, StgIRBuilder builder,
-                                              BuildCtx &bctx) {
-
+Function *materializePrimitiveCaseReturnFrame(
+    const ExpressionCase *c, const std::vector<Identifier> freeVars, Module &m,
+    StgIRBuilder builder, BuildCtx &bctx) {
     std::stringstream namess;
-    namess << "case_" <<  *c->getScrutinee() << "_alts";
+    namess << "case_" << *c->getScrutinee() << "_alts";
 
     Function *F = createNewFunction(
         m, FunctionType::get(builder.getVoidTy(), {}, /*isVarArg=*/false),
@@ -989,20 +995,17 @@ Function *materializePrimitiveCaseReturnFrame(const ExpressionCase *c,
     BuildCtx::Scoper s(bctx);
     if (freeVars.size() > 0) {
         Value *closureAddr =
-                builder.CreateLoad(bctx.enteringClosureAddr,
-                                   "closure_addr_int");
+            builder.CreateLoad(bctx.enteringClosureAddr, "closure_addr_int");
         Value *closure = builder.CreateIntToPtr(
-                closureAddr,
-                bctx.ClosureTy[freeVars.size()]->getPointerTo(),
-                "closure_typed");
+            closureAddr, bctx.ClosureTy[freeVars.size()]->getPointerTo(),
+            "closure_typed");
         int i = 0;
         for (Identifier id : freeVars) {
-            errs() << __FUNCTION__ << " | i:" << i<< " |id:" << id << "\n";
+            errs() << __FUNCTION__ << " | i:" << i << " |id:" << id << "\n";
             Value *v = builder.CreateGEP(
-                    closure,
-                    {builder.getInt64(0), builder.getInt32(1),
-                     builder.getInt32(i)},
-                    id + "_free_param_slot");
+                closure,
+                {builder.getInt64(0), builder.getInt32(1), builder.getInt32(i)},
+                id + "_free_param_slot");
             v = builder.CreateLoad(v, id);
             const StgType *ty = bctx.getIdentifier(id).stgtype;
             bctx.insertIdentifier(id, LLVMValueData(v, ty));
@@ -1080,14 +1083,14 @@ Function *materializePrimitiveCaseReturnFrame(const ExpressionCase *c,
     return F;
 }
 
-static const StgType* getTypeOfExpression(const Expression *e,
-                                           const BuildCtx &bctx) {
-
+static const StgType *getTypeOfExpression(const Expression *e,
+                                          const BuildCtx &bctx) {
     switch (e->getKind()) {
         case Expression::EK_Ap: {
             const ExpressionAp *ap = cast<ExpressionAp>(e);
             const std::string fnName = ap->getFnName();
-            const StgFunctionType *Fty = cast<StgFunctionType>(bctx.getIdentifier(fnName).stgtype);
+            const StgFunctionType *Fty =
+                cast<StgFunctionType>(bctx.getIdentifier(fnName).stgtype);
             return Fty->getReturnType();
             break;
         }
@@ -1107,7 +1110,10 @@ static const StgType* getTypeOfExpression(const Expression *e,
 std::set<Identifier> getIdentifiersInAltLHS(const CaseAlt *alt);
 
 // Get all identifiers referred to by this expression, whether free or bound.
-std::set<Identifier> getFreeVarsInExpression(const Expression *e, iterator_range<BuildCtx::StaticBindingMapTy::const_iterator> staticBindingsRange) {
+std::set<Identifier> getFreeVarsInExpression(
+    const Expression *e,
+    iterator_range<BuildCtx::StaticBindingMapTy::const_iterator>
+        staticBindingsRange) {
     auto extractIdentifierFromAtom = [](std::set<Identifier> &s,
                                         const Atom *a) {
         if (const AtomIdent *id = dyn_cast<AtomIdent>(a))
@@ -1137,25 +1143,28 @@ std::set<Identifier> getFreeVarsInExpression(const Expression *e, iterator_range
         case Expression::EK_Case: {
             const ExpressionCase *c = cast<ExpressionCase>(e);
             // HACK: do not consider scrutinee as free. This is a HACK -_-"
-            //cerr << "HACK: right now, we do not consider the scrutinee as "
+            // cerr << "HACK: right now, we do not consider the scrutinee as "
             //        "free. This is a hack because I have more interesting "
             //        "things I want to try\n";
             // Add the free vars in the scrutinee into the freeVars list.
-            const std::set<Identifier> scrutineeFree(getFreeVarsInExpression(c->getScrutinee(), staticBindingsRange));
+            const std::set<Identifier> scrutineeFree(getFreeVarsInExpression(
+                c->getScrutinee(), staticBindingsRange));
             freeVars.insert(scrutineeFree.begin(), scrutineeFree.end());
 
-            for(const CaseAlt *alt : c->alts_range()) {
-                // The LHS of a case alt contains bindings that are bound throughout the alt subexpression.
-                // So, we can subtract those from the RHS.
-                const std::set<Identifier> lhsBound = getIdentifiersInAltLHS(alt);
-                const std::set<Identifier> rhsFree = getFreeVarsInExpression(alt->getRHS(), staticBindingsRange);
+            for (const CaseAlt *alt : c->alts_range()) {
+                // The LHS of a case alt contains bindings that are bound
+                // throughout the alt subexpression. So, we can subtract those
+                // from the RHS.
+                const std::set<Identifier> lhsBound =
+                    getIdentifiersInAltLHS(alt);
+                const std::set<Identifier> rhsFree =
+                    getFreeVarsInExpression(alt->getRHS(), staticBindingsRange);
 
-                std::set_difference(rhsFree.begin(), rhsFree.end(), lhsBound.begin(),
-                                    lhsBound.end(), std::inserter(freeVars, freeVars.begin()));
-
+                std::set_difference(rhsFree.begin(), rhsFree.end(),
+                                    lhsBound.begin(), lhsBound.end(),
+                                    std::inserter(freeVars, freeVars.begin()));
             }
             break;
-
         }
     };
 
@@ -1164,7 +1173,7 @@ std::set<Identifier> getFreeVarsInExpression(const Expression *e, iterator_range
     for (auto It : staticBindingsRange) {
         freeVars.erase(It.first);
     }
-     return freeVars;
+    return freeVars;
 }
 
 // Get the names of the variables that are feshly bound by an alt.
@@ -1192,14 +1201,14 @@ std::set<Identifier> getIdentifiersInAltLHS(const CaseAlt *alt) {
 
 void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
                      BuildCtx &bctx) {
-
     // use std::vector to prevent all kinds of subtle bugs with reordering.
     const std::vector<Identifier> freeVarsInAlts = [&]() {
         // Collect all free variables in the alternates.
-        std::set<Identifier> ids = getFreeVarsInExpression(c, bctx.getTopLevelBindings());
+        std::set<Identifier> ids =
+            getFreeVarsInExpression(c, bctx.getTopLevelBindings());
 
         std::vector<Identifier> vecids;
-        for(Identifier id : ids) {
+        for (Identifier id : ids) {
             vecids.push_back(id);
         }
         return vecids;
@@ -1218,21 +1227,25 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
         }
     }();
 
-    Value *clsRaw = builder.CreateCall(
-            bctx.malloc,
-            {builder.getInt64(
-                    m.getDataLayout().getTypeAllocSize(bctx.ClosureTy[freeVarsInAlts.size()]))},
-            "closure_raw");
+    Value *clsRaw =
+        builder.CreateCall(bctx.malloc,
+                           {builder.getInt64(m.getDataLayout().getTypeAllocSize(
+                               bctx.ClosureTy[freeVarsInAlts.size()]))},
+                           "closure_raw");
     Value *clsTyped = builder.CreateBitCast(
-            clsRaw, bctx.ClosureTy[freeVarsInAlts.size()]->getPointerTo(), "closure_typed");
+        clsRaw, bctx.ClosureTy[freeVarsInAlts.size()]->getPointerTo(),
+        "closure_typed");
     Value *fnSlot = builder.CreateGEP(
-            clsTyped, {builder.getInt64(0), builder.getInt32(0)}, "fn_slot");
+        clsTyped, {builder.getInt64(0), builder.getInt32(0)}, "fn_slot");
     builder.CreateStore(continuation, fnSlot);
 
     // store free vars into the slot.
     int i = 0;
-    for(Identifier freeVar: freeVarsInAlts) {
-        Value *freeVarSlot = builder.CreateGEP(clsTyped, {builder.getInt64(0), builder.getInt32(1), builder.getInt32(i)}, freeVar + "_free_in_case_slot");
+    for (Identifier freeVar : freeVarsInAlts) {
+        Value *freeVarSlot = builder.CreateGEP(
+            clsTyped,
+            {builder.getInt64(0), builder.getInt32(1), builder.getInt32(i)},
+            freeVar + "_free_in_case_slot");
         Value *freeVarVal = bctx.getIdentifier(freeVar).v;
         freeVarVal = TransmuteToInt(freeVarVal, builder);
         builder.CreateStore(freeVarVal, freeVarSlot);
@@ -1242,8 +1255,8 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
     builder.CreateCall(bctx.pushReturnCont, {clsRaw});
     materializeExpr(scrutinee, m, builder, bctx);
 
-    // clean this up, I should need this epilogue for materializeExpr in the other case as well :(.
-    // if(bctx.isPrimIntTy(scrutineety)) {
+    // clean this up, I should need this epilogue for materializeExpr in the
+    // other case as well :(. if(bctx.isPrimIntTy(scrutineety)) {
     //     builder.CreateRetVoid();
     // }
 }
@@ -1324,7 +1337,8 @@ Function *_materializeDynamicLetBinding(const Binding *b, Module &m,
 
         v = builder.CreateLoad(v, p->getName());
         if (ty != bctx.getPrimIntTy()) {
-            v = builder.CreateIntToPtr(v, getRawMemTy(builder), v->getName() + "_rawmem");
+            v = builder.CreateIntToPtr(v, getRawMemTy(builder),
+                                       v->getName() + "_rawmem");
         }
 
         bctx.insertIdentifier(p->getName(), LLVMValueData(v, ty));
@@ -1335,15 +1349,13 @@ Function *_materializeDynamicLetBinding(const Binding *b, Module &m,
     return F;
 }
 
-
 StgFunctionType *createStgTypeForLambda(const Lambda *l, const BuildCtx &bctx) {
-        SmallVector<const StgType *, 4> paramsty;
-        for(Parameter *p : l->bound_params_range()) {
-            paramsty.push_back(bctx.getTypeFromRawType(p->getTypeRaw()));
-        }
-        const StgType *retty =
-                bctx.getTypeFromName(l->getReturnTypeName());
-        return new StgFunctionType(retty, paramsty);
+    SmallVector<const StgType *, 4> paramsty;
+    for (Parameter *p : l->bound_params_range()) {
+        paramsty.push_back(bctx.getTypeFromRawType(p->getTypeRaw()));
+    }
+    const StgType *retty = bctx.getTypeFromName(l->getReturnTypeName());
+    return new StgFunctionType(retty, paramsty);
 }
 
 void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
@@ -1396,21 +1408,21 @@ void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
     materializeExpr(l->getRHS(), m, builder, bctx);
 };
 
-
-// Rule to enter an int: pop a return continuation and evaluate it with this int.
+// Rule to enter an int: pop a return continuation and evaluate it with this
+// int.
 void materializeEnterInt(Value *v, std::string contName, Module &m,
-                               StgIRBuilder &builder, BuildCtx &bctx) {
+                         StgIRBuilder &builder, BuildCtx &bctx) {
     builder.CreateCall(bctx.pushInt, {v});
-    Value *cont = builder.CreateCall(
-            bctx.popReturnCont, {}, "return_cont_" + contName);
+    Value *cont =
+        builder.CreateCall(bctx.popReturnCont, {}, "return_cont_" + contName);
     materializeEnterDynamicClosure(cont, m, builder, bctx);
 }
 
 // rule to enter an int literal is to simply enter an int.
 void materializeExprIntLiteral(const ExpressionIntLiteral *e, Module &m,
                                StgIRBuilder &builder, BuildCtx &bctx) {
-    materializeEnterInt(builder.getInt64(e->getValue()), std::to_string(e->getValue()),
-            m, builder, bctx);
+    materializeEnterInt(builder.getInt64(e->getValue()),
+                        std::to_string(e->getValue()), m, builder, bctx);
 }
 
 void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
@@ -1454,9 +1466,8 @@ void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
     materializeExpr(l->getRhs(), m, builder, bctx);
 }
 
-
-// Create a static closure for a top-level function. That way, we don't need to repeatedly build
-// the closure.
+// Create a static closure for a top-level function. That way, we don't need to
+// repeatedly build the closure.
 LLVMClosureData materializeStaticClosureForFn(Function *F, std::string name,
                                               Module &m, StgIRBuilder &builder,
                                               BuildCtx &bctx) {
