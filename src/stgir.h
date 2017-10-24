@@ -112,11 +112,6 @@ class DataType {
         report_fatal_error(
             "unknown data constructor variant asked for data declaration");
     }
-
-
-    static DataType *createPrimIntTy() {
-        return new DataType("PrimInt", {});
-    }
 };
 
 // *** Atom ***
