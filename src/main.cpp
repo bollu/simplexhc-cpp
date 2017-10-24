@@ -434,6 +434,7 @@ class BuildCtx {
         dataTypeMap[name] = datatype;
     }
 
+
     const StgType *getTypeFromRawType(const TypeRaw *tyraw) const {
         switch(tyraw->getKind()) {
             case TypeRaw::TK_Data: {
@@ -1315,7 +1316,7 @@ Function *_materializeDynamicLetBinding(const Binding *b, Module &m,
     int i = 0;
     BuildCtx::Scoper s(bctx);
     for (Parameter *p : b->getRhs()->free_params_range()) {
-        const StgType *ty = bctx.getTypeFromName(p->getTypeName());
+        const StgType *ty = bctx.getTypeFromRawType(p->getTypeRaw());
         Value *v = builder.CreateGEP(
             closure,
             {builder.getInt64(0), builder.getInt32(1), builder.getInt32(i)},
@@ -1338,7 +1339,7 @@ Function *_materializeDynamicLetBinding(const Binding *b, Module &m,
 StgFunctionType *createStgTypeForLambda(const Lambda *l, const BuildCtx &bctx) {
         SmallVector<const StgType *, 4> paramsty;
         for(Parameter *p : l->bound_params_range()) {
-            paramsty.push_back(bctx.getTypeFromName(p->getTypeName()));
+            paramsty.push_back(bctx.getTypeFromRawType(p->getTypeRaw()));
         }
         const StgType *retty =
                 bctx.getTypeFromName(l->getReturnTypeName());
@@ -1438,7 +1439,8 @@ void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
                        BuildCtx &bctx) {
     BuildCtx::Scoper scoper(bctx);
     for (const Parameter *p : l->bound_params_range()) {
-        if (bctx.getTypeFromName(p->getTypeName()) == bctx.getPrimIntTy()) {
+        const StgType *Ty = bctx.getTypeFromRawType(p->getTypeRaw());
+        if (Ty == bctx.getPrimIntTy()) {
             Value *pv =
                 builder.CreateCall(bctx.popInt, {}, "param_" + p->getName());
             bctx.insertIdentifier(p->getName(),
@@ -1446,7 +1448,6 @@ void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
         } else {
             Value *pv =
                 builder.CreateCall(bctx.popBoxed, {}, "param_" + p->getName());
-            const StgType *Ty = bctx.getTypeFromName(p->getTypeName());
             bctx.insertIdentifier(p->getName(), LLVMValueData(pv, Ty));
         }
     }

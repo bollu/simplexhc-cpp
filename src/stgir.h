@@ -131,7 +131,7 @@ class DataType {
     private:
         TypeName name;
     public:
-        DataTypeRaw(TypeName name) : name(name), TypeRaw(TK_Data) {};
+        DataTypeRaw(TypeName name) : TypeRaw(TK_Data), name(name) {};
         static bool classof(const TypeRaw *T) { return T->getKind() == TypeRaw::TK_Data; }
         TypeName getName() const { return name; }
     };
@@ -144,7 +144,7 @@ class DataType {
         TypeName returnname;
         SmallVector<TypeName, 4> paramnames;
     public:
-        FunctionTypeRaw(TypeName returnname, ArrayRef<TypeName> paramnamesref) : returnname(returnname), TypeRaw(TK_Function) {
+        FunctionTypeRaw(TypeName returnname, ArrayRef<TypeName> paramnamesref) : TypeRaw(TK_Function), returnname(returnname){
             for(TypeName name : paramnamesref) paramnames.push_back(name);
 
         }
