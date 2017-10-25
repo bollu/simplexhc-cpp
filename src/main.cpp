@@ -1306,6 +1306,27 @@ Value *_allocateLetBindingDynamicClosure(const Binding *b, BasicBlock *BB,
     return typedMem;
 }
 
+
+// Load free parameters from the closure `closure`, with free parameters from 
+// `paramsRange` at basic block `insertBB`.
+// This is useful since closures are shared by both case for alternatives that need
+// to capture free variables, as well as by regular lambdas that need free variables.
+void loadFreeVariableFromClosure(Value *closure, Identifier name, const StgType *ty, int idx, StgIRBuilder builder, BasicBlock *insertBB, BuildCtx &bctx) {
+    builder.SetInsertPoint(insertBB);
+    Value *v = builder.CreateGEP(
+            closure,
+            {builder.getInt64(0), builder.getInt32(1), builder.getInt32(idx)},
+            "free__" + name + "__ty_" + ty->getTypeName());
+
+    v = builder.CreateLoad(v, name);
+    if (ty != bctx.getPrimIntTy()) {
+        v = builder.CreateIntToPtr(v, getRawMemTy(builder),
+                name + "_rawmem");
+    }
+
+    bctx.insertIdentifier(name, LLVMValueData(v, ty));
+}
+
 // Materialize the function that gets executed when a let-binding is
 // evaluated. NOTE: this is exactly the same thing as
 // materializeTopLevelStaticBinding, except that it also creates a static
@@ -1326,22 +1347,12 @@ Function *_materializeDynamicLetBinding(const Binding *b, Module &m,
         closureAddr,
         bctx.ClosureTy[b->getRhs()->free_params_size()]->getPointerTo(),
         "closure_typed");
-    int i = 0;
     BuildCtx::Scoper s(bctx);
+
+    int i = 0;
     for (Parameter *p : b->getRhs()->free_params_range()) {
         const StgType *ty = bctx.getTypeFromRawType(p->getTypeRaw());
-        Value *v = builder.CreateGEP(
-            closure,
-            {builder.getInt64(0), builder.getInt32(1), builder.getInt32(i)},
-            p->getName() + "_" + ty->getTypeName());
-
-        v = builder.CreateLoad(v, p->getName());
-        if (ty != bctx.getPrimIntTy()) {
-            v = builder.CreateIntToPtr(v, getRawMemTy(builder),
-                                       v->getName() + "_rawmem");
-        }
-
-        bctx.insertIdentifier(p->getName(), LLVMValueData(v, ty));
+        loadFreeVariableFromClosure(closure, p->getName(), ty, i, builder, entry, bctx);
         i++;
     }
     materializeLambda(b->getRhs(), m, builder, bctx);
