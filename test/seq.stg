@@ -1,0 +1,18 @@
+# RUN: ./compile-and-run-program.sh %s | FileCheck %s
+# CHECK: 3
+# CHECK: 4
+
+
+binding seq = \(a:()->Boxed b:()->Boxed) -> Boxed { 
+    case a () of
+        default -> b ();
+};
+
+binding printfour = \() -> Boxed { printInt (4) };
+binding printthree = \() -> Boxed { printInt (3) };
+
+binding printthreetwice = \() -> Boxed { seq (printthree printfour) };
+
+binding main = \() -> Boxed { 
+    seq (printthreetwice printthree)
+};
