@@ -218,6 +218,11 @@ class Expression {
         return os;
     }
 
+    
+    void __attribute__((used)) dump() const {
+        std::cerr << *this;
+    }
+
    protected:
     Expression(ExpressionKind kind) : kind(kind){};
 
