@@ -95,6 +95,8 @@ static const StgType *getTypeOfExpression(const Expression *e,
 
 void materializeEnterInt(Value *v, std::string contName, Module &m,
                          StgIRBuilder &builder, BuildCtx &bctx);
+
+void loadFreeVariableFromClosure(Value *closure, Identifier name, const StgType *ty, int idx, StgIRBuilder builder, BasicBlock *insertBB, BuildCtx &bctx);
 struct LLVMClosureData {
     AssertingVH<Function> fn;
     AssertingVH<GlobalVariable> closure;
@@ -891,14 +893,8 @@ Function *materializeCaseConstructorReturnFrame(
             "closure_typed");
         int i = 0;
         for (Identifier id : freeVarsInAlts) {
-            errs() << __FUNCTION__ << " | i:" << i << " |id:" << id << "\n";
-            Value *v = builder.CreateGEP(
-                closure,
-                {builder.getInt64(0), builder.getInt32(1), builder.getInt32(i)},
-                id + "_free_param_slot");
-            v = builder.CreateLoad(v, id);
-            const StgType *ty = bctx.getIdentifier(id).stgtype;
-            bctx.insertIdentifier(id, LLVMValueData(v, ty));
+            // HACK: need correct type info
+            loadFreeVariableFromClosure(closure, id, bctx.getPrimIntTy(), i, builder, entry, bctx);
             i++;
         }
     }
@@ -978,7 +974,7 @@ Function *materializeCaseConstructorReturnFrame(
 
 // Materialize a case over Prim int.
 Function *materializePrimitiveCaseReturnFrame(
-    const ExpressionCase *c, const std::vector<Identifier> freeVars, Module &m,
+    const ExpressionCase *c, const std::vector<Identifier> freeVarsInAlts, Module &m,
     StgIRBuilder builder, BuildCtx &bctx) {
     std::stringstream namess;
     namess << "case_" << *c->getScrutinee() << "_alts";
@@ -993,22 +989,16 @@ Function *materializePrimitiveCaseReturnFrame(
     // here is code duplication in some sense with materializeDynamicLetBinding
     // Open a new scope.
     BuildCtx::Scoper s(bctx);
-    if (freeVars.size() > 0) {
+    if (freeVarsInAlts.size() > 0) {
         Value *closureAddr =
             builder.CreateLoad(bctx.enteringClosureAddr, "closure_addr_int");
         Value *closure = builder.CreateIntToPtr(
-            closureAddr, bctx.ClosureTy[freeVars.size()]->getPointerTo(),
+            closureAddr, bctx.ClosureTy[freeVarsInAlts.size()]->getPointerTo(),
             "closure_typed");
         int i = 0;
-        for (Identifier id : freeVars) {
-            errs() << __FUNCTION__ << " | i:" << i << " |id:" << id << "\n";
-            Value *v = builder.CreateGEP(
-                closure,
-                {builder.getInt64(0), builder.getInt32(1), builder.getInt32(i)},
-                id + "_free_param_slot");
-            v = builder.CreateLoad(v, id);
-            const StgType *ty = bctx.getIdentifier(id).stgtype;
-            bctx.insertIdentifier(id, LLVMValueData(v, ty));
+        for (Identifier id : freeVarsInAlts) {
+            // HACK: need correct type info
+            loadFreeVariableFromClosure(closure, id, bctx.getPrimIntTy(), i, builder, entry, bctx);
             i++;
         }
     }
