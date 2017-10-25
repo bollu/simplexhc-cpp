@@ -894,7 +894,8 @@ Function *materializeCaseConstructorReturnFrame(
         int i = 0;
         for (Identifier id : freeVarsInAlts) {
             // HACK: need correct type info
-            loadFreeVariableFromClosure(closure, id, bctx.getPrimIntTy(), i, builder, entry, bctx);
+            const StgType *ty = bctx.getIdentifier(id).stgtype;
+            loadFreeVariableFromClosure(closure, id, ty, i, builder, entry, bctx);
             i++;
         }
     }
@@ -998,7 +999,8 @@ Function *materializePrimitiveCaseReturnFrame(
         int i = 0;
         for (Identifier id : freeVarsInAlts) {
             // HACK: need correct type info
-            loadFreeVariableFromClosure(closure, id, bctx.getPrimIntTy(), i, builder, entry, bctx);
+            const StgType *ty = bctx.getIdentifier(id).stgtype;
+            loadFreeVariableFromClosure(closure, id, ty, i, builder, entry, bctx);
             i++;
         }
     }
