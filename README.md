@@ -22,15 +22,28 @@ Some of the ideas related to this moonshot project are
 [written down in my repo: `bollu/dependence-analysis-hask`](https://github.com/bollu/dependence-analysis-hask)
 
 # Progress
-- [ ] Function application (only bound parameters).
-- [ ] Function application (free parameters).
+## Minimum viable
+- [x] Function application (only bound parameters).
+- [x] Function application (free parameters).
 - [x] Constructors.
-- [x] Case.
-- [ ] Let (non-recursive).
-- [ ] Letrec.
+- [x] Primitive Case (over `Int#`).
+- [x] Boxed Case (over regular types).
+- [x] Free variables in Case
+- [x] Let (non-recursive).
+- [x] Letrec.
+- [ ] Threads
+- [ ] Garbage collection.
+
+## Completeness
+- [ ] Black holes
 - [ ] Basic IO (Right now, only `printInt` exists).
 - [ ] ST(?).
-- [ ] Garbage collection.
+- [ ] SMT.
+- [ ] Add `double` and `float` types.
+- [ ] GHC `Core` plugin to dump out `simplexhc` style STG.
+
+
+
 
 # Relationship to the other `simplechc` repo.
 
