@@ -1,7 +1,7 @@
 # RUN: ./compile-and-run-program.sh %s | FileCheck %s
 # CHECK: 2
 
-data IntTy = IntCons (IntWrappedTy);
+data IntTy = IntCons (PrimInt);
 data IntWrappedTy = IntWrappedCons (IntTy);
 
 binding two = \() -> IntTy { IntCons (2) };
