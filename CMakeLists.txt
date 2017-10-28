@@ -6,7 +6,8 @@ set(CMAKE_CXX_FLAGS "-fdiagnostics-color=always -fno-rtti -g -Wall")
 
 # LLVM
 find_package(LLVM REQUIRED)
-llvm_map_components_to_libnames(LLVM_LIBS Core Support Bitwriter)
+# HACK: I'm using all
+llvm_map_components_to_libnames(LLVM_LIBS all Core Support BitWriter Target Codegen AsmPrinter MC)
 
 # FLEX AND BISON
 find_package(BISON)
