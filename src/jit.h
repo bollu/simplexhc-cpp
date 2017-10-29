@@ -40,7 +40,7 @@ class SimpleJIT {
 
     TargetMachine &getTargetMachine() { return *tm; }
 
-    SimpleJIT::ModuleHandle addModule(std::shared_ptr<Module> M) {
+    SimpleJIT::ModuleHandle addModule(std::unique_ptr<Module> M) {
         // Build our symbol resolver:
         // Lambda 1: Look back into the JIT itself to find symbols that are part
         // of
@@ -53,15 +53,16 @@ class SimpleJIT {
             },
             [](const std::string &Name) {
                 if (auto SymAddr =
-                        RTDyldMemoryManager::getSymbolAddressInProcess(Name))
+                        RTDyldMemoryManager::getSymbolAddressInProcess(Name)) {
                     return JITSymbol(SymAddr, JITSymbolFlags::Exported);
+            }
                 return JITSymbol(nullptr);
             });
-
+        M->setDataLayout(dl);
         // Add the set to the JIT with the resolver we created above and a newly
         // created SectionMemoryManager.
         return cantFail(
-            compileLayer.addModule(M, std::move(Resolver)));
+            compileLayer.addModule(std::move(M), std::move(Resolver)));
     }
 
     JITSymbol findSymbol(const std::string Name) {
@@ -71,11 +72,9 @@ class SimpleJIT {
         return compileLayer.findSymbol(MangledNameStream.str(), true);
     }
 
-    JITTargetAddress getSymbolAddress(const std::string Name) {
-        return *findSymbol(Name).getAddress();
-    }
 
     void removeModule(SimpleJIT::ModuleHandle H) {
         cantFail(compileLayer.removeModule(H));
     }
+
 };

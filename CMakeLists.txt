@@ -44,10 +44,8 @@ add_custom_target(
 
 # libstg
 add_library(stgruntime
-    STATIC
-    lib/libstg.c)
+    SHARED lib/libstg.c)
 set_target_properties(stgruntime PROPERTIES C_STANDARD 99)
-target_link_libraries(stgruntime -lstdc)
 
 # DOXYGEN
 # first we can indicate the documentation build as an option and set it to ON by default
@@ -73,3 +71,6 @@ if (DOXYGEN_FOUND)
 else (DOXYGEN_FOUND)
   message("Doxygen need to be installed to generate the doxygen documentation")
 endif (DOXYGEN_FOUND)
+
+# add stgruntime to simplexhc so the JIT has access to all functions from stgruntime.
+target_link_libraries(simplexhc stgruntime)

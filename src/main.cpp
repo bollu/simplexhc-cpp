@@ -22,6 +22,7 @@
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 #include "stgir.h"
 #include "jit.h"
 #include "cxxopts.hpp"
@@ -38,6 +39,8 @@ using namespace stg;
 using namespace llvm;
 
 class BuildCtx;
+
+typedef void (*SimplexhcMainTy)(void);
 
 class StgType {
    public:
@@ -1586,9 +1589,19 @@ StructType *materializeDataConstructor(const DataType *decl,
     return Ty;
 };
 
+
 int compile_program(stg::Program *program, cxxopts::Options &opts) {
+
+    // ask LLVM to kindly initialize all of its knowledge about targets.
+    InitializeAllTargetInfos();
+    InitializeAllTargets();
+    InitializeAllTargetMCs();
+    InitializeAllAsmParsers();
+    InitializeAllAsmPrinters();
+
     const std::string OPTION_OUTPUT_FILENAME = opts["o"].as<std::string>();
     const bool OPTION_DUMP_LLVM = opts.count("emit-llvm") > 0;
+    const bool OPTION_JIT = opts.count("jit") > 0;
 
     errs() << "OPTION_DUMP_LLVM: " << OPTION_DUMP_LLVM << "\n";
     errs() << "OPTION_OUTPUT_FILENAME: |" << OPTION_OUTPUT_FILENAME << "|\n";
@@ -1596,7 +1609,7 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
     static LLVMContext ctx;
     static StgIRBuilder builder(ctx);
 
-    Module *m = new Module("Module", ctx);
+    std::unique_ptr<Module> m(new Module("Module", ctx));
 
     cerr << "----\n";
     cerr << "Program: ";
@@ -1647,39 +1660,60 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         exit(1);
     }
 
+
+    if(OPTION_JIT){
+        errs() << "EXECUTING MODULE:\n";
+        SimpleJIT jit;
+        SimpleJIT::ModuleHandle H = jit.addModule(CloneModule(m.get()));
+        Expected<JITTargetAddress> maybeMain = jit.findSymbol("main").getAddress();
+        if (!maybeMain) {
+            errs() << "unable to find `main` in given module:\n";
+            m->print(outs(), nullptr);
+            exit(1);
+        }
+        SimplexhcMainTy main = (SimplexhcMainTy) maybeMain.get();
+        std::cout.flush();
+        main();
+        std::cout.flush();
+        outs() << "\n----------------\n";
+    }
+
+
+
     if (OPTION_DUMP_LLVM) {
         m->print(outputFile, nullptr);
     }
     else {
-        InitializeAllTargetInfos();
-        InitializeAllTargets();
-        InitializeAllTargetMCs();
-        InitializeAllAsmParsers();
-        InitializeAllAsmPrinters();
-
-        const std::string CPU = "generic";
-        auto TargetTriple = sys::getDefaultTargetTriple();
-        std::string Error;
-        auto Target = TargetRegistry::lookupTarget(TargetTriple, Error);
-        if (!Target) {
-            errs() << Error;
-            report_fatal_error("unable to lookup target");
+        if (OPTION_OUTPUT_FILENAME == "-"){
+            errs() << "WARNING: trying to print object file to stdout, this will be ugly. skipping because this is pointless for now.\n";
         }
+        else {
+            const std::string CPU = "generic";
+            auto TargetTriple = sys::getDefaultTargetTriple();
+            std::string Error;
+            auto Target = TargetRegistry::lookupTarget(TargetTriple, Error);
+            if (!Target) {
+                errs() << Error;
+                report_fatal_error("unable to lookup target");
+            }
 
 
+            TargetOptions opt;
+            auto RM = Optional<Reloc::Model>();
+            const std::string Features = "";
+            llvm::TargetMachine *TM = Target->createTargetMachine(TargetTriple,
+                                                                  CPU, Features,
+                                                                  opt, RM);
+            m->setDataLayout(TM->createDataLayout());
+            auto FileType = TargetMachine::CGFT_ObjectFile;
 
-        TargetOptions opt;
-        auto RM = Optional<Reloc::Model>();
-        const std::string Features = "";
-        llvm::TargetMachine *TM = Target->createTargetMachine(TargetTriple, CPU, Features, opt, RM);
-        m->setDataLayout(TM->createDataLayout());
-        auto FileType = TargetMachine::CGFT_ObjectFile;
-
-        legacy::PassManager PM;
-        if (TM->addPassesToEmitFile(PM, outputFile, FileType)) {
-            report_fatal_error("Target machine can't emit a file of this type.");
+            legacy::PassManager PM;
+            if (TM->addPassesToEmitFile(PM, outputFile, FileType)) {
+                report_fatal_error(
+                        "Target machine can't emit a file of this type.");
+            }
+            PM.run(*m);
         }
-        PM.run(*m);
     }
     outputFile.flush();
 

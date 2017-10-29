@@ -76,10 +76,11 @@ int main(int argc, char **argv) {
             options.add_options()
             ("input-filepath", "Input file path", cxxopts::value<std::string>())
             ("emit-llvm", "Emit LLVM IR instead of assembly.")
+            ("jit", "JIT compiles and runs the input file.")
             ("o, output", "Output file path", cxxopts::value<std::string>()->default_value("-"))
             ("positional-container", "Continer for positional args", cxxopts::value<std::vector<std::string>>())
             ;
-    options.parse_positional(std::vector<std::string>({"input-filepath", "emit-llvm", "positional-container"}));
+    options.parse_positional(std::vector<std::string>({"input-filepath", "positional-container"}));
     options.parse(argc, argv);
 
     assert(options.count("input-filepath") && "input filename not given!");
