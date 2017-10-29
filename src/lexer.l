@@ -8,6 +8,9 @@
 #include "llvm/Support/CommandLine.h"
 #include "cxxopts.hpp"
 #include <cstdio>
+
+static const char *VERSION_STRING = "0.1.0";
+
 using namespace stg;
 
 // Keep this at the end so it can see all the includes made here.
@@ -78,10 +81,16 @@ int main(int argc, char **argv) {
             ("emit-llvm", "Emit LLVM IR instead of assembly.")
             ("jit", "JIT compiles and runs the input file.")
             ("o, output", "Output file path", cxxopts::value<std::string>()->default_value("-"))
+            ("version", "version information");
             ("positional-container", "Continer for positional args", cxxopts::value<std::vector<std::string>>())
             ;
     options.parse_positional(std::vector<std::string>({"input-filepath", "positional-container"}));
     options.parse(argc, argv);
+
+    if (options.count("version")) {
+        printf("%s\n", VERSION_STRING);
+        return 0;
+    }
 
     assert(options.count("input-filepath") && "input filename not given!");
     std::string OPTION_INPUT_FILENAME = options["input-filepath"].as<std::string>();
