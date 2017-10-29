@@ -23,6 +23,7 @@
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "stgir.h"
+#include "jit.h"
 #include "cxxopts.hpp"
  
 using namespace llvm;

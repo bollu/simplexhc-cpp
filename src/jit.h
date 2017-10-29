@@ -25,21 +25,22 @@ using namespace llvm::orc;
 class SimpleJIT {
     TargetMachine *tm;
     const DataLayout dl;
-    llvm::orc::RTDyldObjectLinkingLayerBase objectLayer;
-    llvm::orc::IRCompileLayer<decltype(objectLayer), llvm::orc::SimpleCompiler> compileLayer;
+    llvm::orc::RTDyldObjectLinkingLayer objectLayer;
+    llvm::orc::IRCompileLayer<RTDyldObjectLinkingLayer, llvm::orc::SimpleCompiler> compileLayer;
 
    public:
     using ModuleHandle = decltype(compileLayer)::ModuleHandleT;
     SimpleJIT()
         : tm(EngineBuilder().selectTarget()),
           dl(tm->createDataLayout()),
+          objectLayer([]() { return std::make_shared<SectionMemoryManager>(); }),
           compileLayer(objectLayer, SimpleCompiler(*tm)) {
         llvm::sys::DynamicLibrary::LoadLibraryPermanently(nullptr);
     }
 
     TargetMachine &getTargetMachine() { return *tm; }
 
-    SimpleJIT::ModuleHandle addModule(Module *M) {
+    SimpleJIT::ModuleHandle addModule(std::shared_ptr<Module> M) {
         // Build our symbol resolver:
         // Lambda 1: Look back into the JIT itself to find symbols that are part
         // of
@@ -60,7 +61,7 @@ class SimpleJIT {
         // Add the set to the JIT with the resolver we created above and a newly
         // created SectionMemoryManager.
         return cantFail(
-            compileLayer.addModule(std::move(M), std::move(Resolver)));
+            compileLayer.addModule(M, std::move(Resolver)));
     }
 
     JITSymbol findSymbol(const std::string Name) {
@@ -71,7 +72,7 @@ class SimpleJIT {
     }
 
     JITTargetAddress getSymbolAddress(const std::string Name) {
-        return findSymbol(Name).getAddress();
+        return *findSymbol(Name).getAddress();
     }
 
     void removeModule(SimpleJIT::ModuleHandle H) {
