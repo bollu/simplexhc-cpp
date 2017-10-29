@@ -1671,6 +1671,7 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         auto RM = Optional<Reloc::Model>();
         const std::string Features = "";
         llvm::TargetMachine *TM = Target->createTargetMachine(TargetTriple, CPU, Features, opt, RM);
+        m->setDataLayout(TM->createDataLayout());
         auto FileType = TargetMachine::CGFT_ObjectFile;
 
         legacy::PassManager PM;
