@@ -1,4 +1,4 @@
-# RUN: ./compile-and-run-program.sh %s | FileCheck %s
+# RUN: %loadSimplexhc %s  --jit | FileCheck %s
 # CHECK: 10
 
 data DInt  = Int (PrimInt) | Int2 (PrimInt PrimInt);

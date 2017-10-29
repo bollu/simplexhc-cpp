@@ -1,4 +1,4 @@
-# RUN: ./compile-and-run-program.sh %s | FileCheck %s
+# RUN: %loadSimplexhc %s  --jit | FileCheck %s
 # CHECK: 4
 
 data Int  = IntCons (PrimInt);

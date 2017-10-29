@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.4.3)
-project(simplexhc C CXX)
+project(sxhc C CXX)
 
 # Colors when compiling with clang
 set(CMAKE_CXX_FLAGS "-fdiagnostics-color=always -fno-rtti -g -Wall")
@@ -21,14 +21,14 @@ add_flex_bison_dependency(Lexer Parser)
 # INCLUDES AND SOURCES
 include_directories(include)
 
-add_executable(simplexhc
+add_executable(sxhc
     src/main.cpp
     src/stgir.cpp
     ${BISON_Parser_OUTPUTS}
     ${FLEX_Lexer_OUTPUTS})
 
-target_link_libraries(simplexhc ${LLVM_LIBS} -lstdc++)
-set_target_properties(simplexhc PROPERTIES CXX_STANDARD 14)
+target_link_libraries(sxhc ${LLVM_LIBS} -lstdc++)
+set_target_properties(sxhc PROPERTIES CXX_STANDARD 14)
 
 # CLANG FORMAT
 file(GLOB_RECURSE ALL_SOURCE_FILES *.cpp *.h)
@@ -72,5 +72,5 @@ else (DOXYGEN_FOUND)
   message("Doxygen need to be installed to generate the doxygen documentation")
 endif (DOXYGEN_FOUND)
 
-# add stgruntime to simplexhc so the JIT has access to all functions from stgruntime.
-target_link_libraries(simplexhc stgruntime)
+# add stgruntime to sxhc so the JIT has access to all functions from stgruntime.
+target_link_libraries(sxhc stgruntime)
