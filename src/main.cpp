@@ -1603,16 +1603,13 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
     const bool OPTION_DUMP_LLVM = opts.count("emit-llvm") > 0;
     const bool OPTION_JIT = opts.count("jit") > 0;
 
-    errs() << "OPTION_DUMP_LLVM: " << OPTION_DUMP_LLVM << "\n";
-    errs() << "OPTION_OUTPUT_FILENAME: |" << OPTION_OUTPUT_FILENAME << "|\n";
-
     static LLVMContext ctx;
     static StgIRBuilder builder(ctx);
 
     std::unique_ptr<Module> m(new Module("Module", ctx));
 
     cerr << "----\n";
-    cerr << "Program: ";
+    cerr << "Source program: ";
     cerr << *program << "\n";
     cerr << "----\n";
 
@@ -1660,26 +1657,6 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         exit(1);
     }
 
-
-    if(OPTION_JIT){
-        errs() << "EXECUTING MODULE:\n";
-        SimpleJIT jit;
-        SimpleJIT::ModuleHandle H = jit.addModule(CloneModule(m.get()));
-        Expected<JITTargetAddress> maybeMain = jit.findSymbol("main").getAddress();
-        if (!maybeMain) {
-            errs() << "unable to find `main` in given module:\n";
-            m->print(outs(), nullptr);
-            exit(1);
-        }
-        SimplexhcMainTy main = (SimplexhcMainTy) maybeMain.get();
-        std::cout.flush();
-        main();
-        std::cout.flush();
-        outs() << "\n----------------\n";
-    }
-
-
-
     if (OPTION_DUMP_LLVM) {
         m->print(outputFile, nullptr);
     }
@@ -1716,6 +1693,25 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         }
     }
     outputFile.flush();
+
+
+    if(OPTION_JIT){
+        errs() << "---------\n";
+        errs() << "JIT: executing module:\n";
+        SimpleJIT jit;
+        SimpleJIT::ModuleHandle H = jit.addModule(CloneModule(m.get()));
+        Expected<JITTargetAddress> maybeMain = jit.findSymbol("main").getAddress();
+        if (!maybeMain) {
+            errs() << "unable to find `main` in given module:\n";
+            m->print(outs(), nullptr);
+            exit(1);
+        }
+        SimplexhcMainTy main = (SimplexhcMainTy) maybeMain.get();
+        std::cout.flush();
+        main();
+        std::cout.flush();
+        outs() << "\n----------------\n";
+    }
 
     return 0;
 }
