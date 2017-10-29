@@ -73,28 +73,54 @@ int yywrap(void) {
     return 1;
 }
 
+void printHelp(cxxopts::Options &options) {
+     if (options.count("help"))
+     {
+          std::cout << options.help({"", "Group"}) << std::endl;
+          exit(0);
+    }
+}
+
 int main(int argc, char **argv) {
         cxxopts::Options options(argv[0], " - command line options.");
         options.positional_help("[optional args]");
             options.add_options()
-            ("input-filepath", "Input file path", cxxopts::value<std::string>())
+            ("i,input-filepath", "Input file path.", cxxopts::value<std::string>())
             ("emit-llvm", "Emit LLVM IR instead of assembly.")
             ("emit-asm", "Emit assembly.")
             ("jit", "JIT compiles and runs the input file.")
-            ("o, output", "Output file path", cxxopts::value<std::string>()->default_value("-"))
-            ("version", "version information");
-            ("positional-container", "Continer for positional args", cxxopts::value<std::vector<std::string>>())
+            ("o,output-filepath", "Output file path.", cxxopts::value<std::string>()->default_value("-"))
+            ("version", "version information.")
+            ("help", "print help.")
+            ("positional-container", "Continer for positional args.", cxxopts::value<std::vector<std::string>>())
             ;
     options.parse_positional(std::vector<std::string>({"input-filepath", "positional-container"}));
     options.parse(argc, argv);
 
-    assert(!(options.count("emit-llvm") && options.count("emit-asm")) && "cannot emit both assembly and LLVM at the same time");
+
+     if (options.count("help")) {
+         printHelp(options);
+         return 0;
+
+     };
+
+    if(options.count("emit-llvm") && options.count("emit-asm")) {
+        std::cerr << "cannot emit both assembly and LLVM at the same time";
+        printHelp(options);
+        return 1;
+    }
+
     if (options.count("version")) {
         printf("%s\n", VERSION_STRING);
         return 0;
     }
 
-    assert(options.count("input-filepath") && "input filename not given!");
+    if(!options.count("input-filepath")){
+      std::cerr << "input filename not given!";
+      printHelp(options);
+      return 1;
+    }
+
     std::string OPTION_INPUT_FILENAME = options["input-filepath"].as<std::string>();
 
     yyin = fopen(OPTION_INPUT_FILENAME.c_str(), "r");
