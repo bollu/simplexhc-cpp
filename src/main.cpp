@@ -1602,6 +1602,7 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
     const std::string OPTION_OUTPUT_FILENAME = opts["o"].as<std::string>();
     const bool OPTION_DUMP_LLVM = opts.count("emit-llvm") > 0;
     const bool OPTION_JIT = opts.count("jit") > 0;
+    const TargetMachine::CodeGenFileType  OPTION_CODEGEN_FILE_TYPE = opts.count("emit-asm") ? TargetMachine::CGFT_AssemblyFile : TargetMachine::CGFT_ObjectFile;
 
     static LLVMContext ctx;
     static StgIRBuilder builder(ctx);
@@ -1661,8 +1662,9 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         m->print(outputFile, nullptr);
     }
     else {
-        if (OPTION_OUTPUT_FILENAME == "-"){
-            errs() << "WARNING: trying to print object file to stdout, this will be ugly. skipping because this is pointless for now.\n";
+        if (OPTION_OUTPUT_FILENAME == "-" && OPTION_CODEGEN_FILE_TYPE == TargetMachine::CGFT_ObjectFile){
+            errs() << "WARNING: trying to print an object file to stdout, this will be ugly. skipping because this is pointless for now.\n";
+            errs() << "To print LLVM IR, use --emit-llvm. To print assembly, use --emit-asm\n";
         }
         else {
             const std::string CPU = "generic";
@@ -1682,10 +1684,9 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
                                                                   CPU, Features,
                                                                   opt, RM);
             m->setDataLayout(TM->createDataLayout());
-            auto FileType = TargetMachine::CGFT_ObjectFile;
 
             legacy::PassManager PM;
-            if (TM->addPassesToEmitFile(PM, outputFile, FileType)) {
+            if (TM->addPassesToEmitFile(PM, outputFile, OPTION_CODEGEN_FILE_TYPE)) {
                 report_fatal_error(
                         "Target machine can't emit a file of this type.");
             }

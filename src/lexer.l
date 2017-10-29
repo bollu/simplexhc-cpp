@@ -79,6 +79,7 @@ int main(int argc, char **argv) {
             options.add_options()
             ("input-filepath", "Input file path", cxxopts::value<std::string>())
             ("emit-llvm", "Emit LLVM IR instead of assembly.")
+            ("emit-asm", "Emit assembly.")
             ("jit", "JIT compiles and runs the input file.")
             ("o, output", "Output file path", cxxopts::value<std::string>()->default_value("-"))
             ("version", "version information");
@@ -87,6 +88,7 @@ int main(int argc, char **argv) {
     options.parse_positional(std::vector<std::string>({"input-filepath", "positional-container"}));
     options.parse(argc, argv);
 
+    assert(!(options.count("emit-llvm") && options.count("emit-asm")) && "cannot emit both assembly and LLVM at the same time");
     if (options.count("version")) {
         printf("%s\n", VERSION_STRING);
         return 0;
