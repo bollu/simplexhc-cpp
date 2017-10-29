@@ -23,11 +23,11 @@
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "stgir.h"
-
+ 
 using namespace llvm;
 
 // The - option defaults to opening STDOUT;
-cl::opt<std::string> OPTION_OUTPUT_FILENAME("o", cl::desc("Specify output filename"), cl::value_desc("filename"), cl::init("-"));
+cl::opt<std::string> OPTION_OUTPUT_FILENAME("output", cl::desc("Specify output filename"), cl::value_desc("filename"), cl::init("-"));
 cl::opt<bool> OPTION_DUMP_LLVM("emit-llvm", cl::desc("dump output in LLVM assembly, not as an object file"), cl::value_desc("write llvm to output file"), cl::init(false));
 
 
@@ -1585,7 +1585,6 @@ StructType *materializeDataConstructor(const DataType *decl,
 };
 
 int compile_program(stg::Program *program, int argc, char **argv) {
-    cl::ParseCommandLineOptions(argc, argv);
 
     static LLVMContext ctx;
     static StgIRBuilder builder(ctx);

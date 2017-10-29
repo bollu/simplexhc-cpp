@@ -2,8 +2,10 @@
 #pragma clang diagnostic ignored "-Wdeprecated-register"
 #include <math.h>
 #include <iostream>
+#include <string>
 #include <stdio.h>
 #include "stgir.h"
+#include "llvm/Support/CommandLine.h"
 using namespace stg;
 
 // Keep this at the end so it can see all the includes made here.
@@ -19,6 +21,8 @@ int g_lexer_line_num = 1;
 int g_lexer_success = 1;
 
 int compile_program(stg::Program *p, int argc, char **argv);
+
+llvm::cl::opt<std::string> OPTION_INPUT_FILENAME(llvm::cl::Positional, llvm::cl::desc("<input filename>"), llvm::cl::Required);
 %}
 
 
@@ -65,6 +69,11 @@ int yywrap(void) {
 }
 
 int main(int argc, char **argv) {
+    cl::ParseCommandLineOptions(argc, argv);
+    printf(__FILE__);
+    printf("input filename: %s", OPTION_INPUT_FILENAME.c_str());
+    yyin = fopen(OPTION_INPUT_FILENAME.c_str(), "r");
+    printf(__FILE__);
     do {
         yyparse();
     } while (!feof(yyin));
