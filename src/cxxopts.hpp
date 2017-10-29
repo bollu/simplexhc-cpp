@@ -865,7 +865,7 @@ namespace cxxopts
 #ifdef CXXOPTS_NO_RTTI
       return static_cast<const values::standard_value<T>&>(*m_value).get();
 #else
-      return dynamic_cast<const values::standard_value<T>&>(*m_value).get();
+      return static_cast<const values::standard_value<T>&>(*m_value).get();
 #endif
     }
 

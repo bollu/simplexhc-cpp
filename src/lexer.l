@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include "stgir.h"
 #include "llvm/Support/CommandLine.h"
+#include "cxxopts.hpp"
+#include <cstdio>
 using namespace stg;
 
 // Keep this at the end so it can see all the includes made here.
@@ -20,7 +22,7 @@ extern stg::Program *g_program;
 int g_lexer_line_num = 1;
 int g_lexer_success = 1;
 
-int compile_program(stg::Program *p, int argc, char **argv);
+int compile_program(stg::Program *p, cxxopts::Options &options);
 
 llvm::cl::opt<std::string> OPTION_INPUT_FILENAME(llvm::cl::Positional, llvm::cl::desc("<input filename>"), llvm::cl::Required);
 %}
@@ -69,16 +71,32 @@ int yywrap(void) {
 }
 
 int main(int argc, char **argv) {
-    cl::ParseCommandLineOptions(argc, argv);
-    printf(__FILE__);
-    printf("input filename: %s", OPTION_INPUT_FILENAME.c_str());
+        cxxopts::Options options(argv[0], " - command line options.");
+        options.positional_help("[optional args]");
+            options.add_options()
+            ("input-filepath", "Input file path", cxxopts::value<std::string>())
+            ("emit-llvm", "Emit LLVM IR instead of assembly.")
+            ("o, output", "Output file path", cxxopts::value<std::string>()->default_value("-"))
+            ("positional-container", "Continer for positional args", cxxopts::value<std::vector<std::string>>())
+            ;
+    options.parse_positional(std::vector<std::string>({"input-filepath", "emit-llvm", "positional-container"}));
+    options.parse(argc, argv);
+
+    assert(options.count("input-filepath") && "input filename not given!");
+    std::string OPTION_INPUT_FILENAME = options["input-filepath"].as<std::string>();
+
     yyin = fopen(OPTION_INPUT_FILENAME.c_str(), "r");
-    printf(__FILE__);
+    if (yyin == NULL) {
+        printf("unable to open input file: %s\n", OPTION_INPUT_FILENAME.c_str());
+        perror("file open error: ");
+        return 1;
+    }
+
     do {
         yyparse();
     } while (!feof(yyin));
     if (g_lexer_success) {
-        return compile_program(g_program, argc, argv);
+        return compile_program(g_program, options);
     } else {
         return 1;
     }

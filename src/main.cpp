@@ -23,15 +23,16 @@
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "stgir.h"
+#include "cxxopts.hpp"
  
 using namespace llvm;
 
 // The - option defaults to opening STDOUT;
-cl::opt<std::string> OPTION_OUTPUT_FILENAME("output", cl::desc("Specify output filename"), cl::value_desc("filename"), cl::init("-"));
-cl::opt<bool> OPTION_DUMP_LLVM("emit-llvm", cl::desc("dump output in LLVM assembly, not as an object file"), cl::value_desc("write llvm to output file"), cl::init(false));
+//cl::opt<std::string> OPTION_OUTPUT_FILENAME("output", cl::desc("Specify output filename"), cl::value_desc("filename"), cl::init("-"));
+//cl::opt<bool> OPTION_DUMP_LLVM("emit-llvm", cl::desc("dump output in LLVM assembly, not as an object file"), cl::value_desc("write llvm to output file"), cl::init(false));
 
 
-    using namespace std;
+using namespace std;
 using namespace stg;
 using namespace llvm;
 
@@ -1584,7 +1585,12 @@ StructType *materializeDataConstructor(const DataType *decl,
     return Ty;
 };
 
-int compile_program(stg::Program *program, int argc, char **argv) {
+int compile_program(stg::Program *program, cxxopts::Options &opts) {
+    const std::string OPTION_OUTPUT_FILENAME = opts["o"].as<std::string>();
+    const bool OPTION_DUMP_LLVM = opts.count("emit-llvm") > 0;
+
+    errs() << "OPTION_DUMP_LLVM: " << OPTION_DUMP_LLVM << "\n";
+    errs() << "OPTION_OUTPUT_FILENAME: |" << OPTION_OUTPUT_FILENAME << "|\n";
 
     static LLVMContext ctx;
     static StgIRBuilder builder(ctx);
@@ -1603,8 +1609,9 @@ int compile_program(stg::Program *program, int argc, char **argv) {
         bctx.insertType(datatype->getTypeName(), new StgDataType(datatype));
         for (DataConstructor *cons : datatype->constructors_range()) {
             bctx.insertDataConstructor(
-                cons->getName(), cons,
-                materializeDataConstructor(datatype, cons, *m, builder, bctx));
+                    cons->getName(), cons,
+                    materializeDataConstructor(datatype, cons, *m, builder,
+                                               bctx));
         }
     }
 
@@ -1615,8 +1622,8 @@ int compile_program(stg::Program *program, int argc, char **argv) {
         }
 
         bctx.insertTopLevelBinding(
-            b->getName(), createStgTypeForLambda(b->getRhs(), bctx),
-            materializeTopLevelStaticBinding(b, *m, builder, bctx));
+                b->getName(), createStgTypeForLambda(b->getRhs(), bctx),
+                materializeTopLevelStaticBinding(b, *m, builder, bctx));
     }
 
     if (verifyModule(*m, nullptr) == 1) {
@@ -1630,8 +1637,14 @@ int compile_program(stg::Program *program, int argc, char **argv) {
     }
 
     std::error_code errcode;
-    llvm::raw_fd_ostream outputFile(OPTION_OUTPUT_FILENAME, errcode, llvm::sys::fs::F_None);
-    assert(!errcode && "unable to open output file for writing bitcode");
+    llvm::raw_fd_ostream outputFile(OPTION_OUTPUT_FILENAME, errcode,
+                                    llvm::sys::fs::F_None);
+
+    if (errcode) {
+        std::cerr << "Unable to open output file: " << OPTION_OUTPUT_FILENAME << "\n";
+        std::cerr << "Error: " << errcode.message() << "\n";
+        exit(1);
+    }
 
     if (OPTION_DUMP_LLVM) {
         m->print(outputFile, nullptr);
