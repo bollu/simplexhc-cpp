@@ -368,7 +368,10 @@ class BuildCtx {
         enterDynamicClosure = addEnterDynamicClosureToModule(m, builder, *this);
 
         // *** primMultiply *** //
-        primMultiply = addPrimMultiplyToModule(m, builder, *this);
+        primMultiply = addPrimArithBinopToModule("primMultiply", [](StgIRBuilder builder, Value *a, Value *b) {
+            return builder.CreateMul(a, b);
+        }, m, builder, *this);
+
         this->insertTopLevelBinding(
             "primMultiply",
             new StgFunctionType(this->primIntTy,
@@ -686,19 +689,24 @@ class BuildCtx {
         return F;
     }
 
-    static LLVMClosureData *addPrimMultiplyToModule(Module &m,
+
+
+    // FTy :: StgIRBuilder -> Value* -> Value* -> Value*
+    template<typename FTy>
+    static LLVMClosureData *addPrimArithBinopToModule(std::string name, FTy FResultBuilder, Module &m,
                                                     StgIRBuilder builder,
                                                     BuildCtx &bctx) {
         Function *F =
             createNewFunction(m,
                               FunctionType::get(builder.getVoidTy(), {},
                                                 /*varargs = */ false),
-                              "primMultiply");
+                              name);
         BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
         builder.SetInsertPoint(entry);
         Value *i = builder.CreateCall(bctx.popInt, {}, "i");
         Value *j = builder.CreateCall(bctx.popInt, {}, "j");
-        Value *result = builder.CreateMul(i, j, "result");
+        Value *result = FResultBuilder(builder, i, j); // builder.CreateMul(i, j, "result");
+        result->setName("result");
 
         builder.CreateCall(bctx.pushInt, {result});
 
