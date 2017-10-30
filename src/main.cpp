@@ -378,6 +378,13 @@ class BuildCtx {
                                 {this->primIntTy, this->primIntTy}),
             *primMultiply);
 
+        // *** primSubtract *** //
+        LLVMClosureData *primSubtract = addPrimArithBinopToModule("primSubtract", [](StgIRBuilder builder, Value *a, Value *b){
+            return builder.CreateSub(a, b);
+        }, m, builder, *this);
+        this->insertTopLevelBinding("primSubtract", new StgFunctionType(this->primIntTy, {this->primIntTy, this->primIntTy}), *primSubtract);
+        delete primSubtract;
+
         // *** printInt *** //
         printInt = [&] {
             Function *F =

@@ -1,0 +1,24 @@
+# RUN: %loadSimplexhc %s  --jit | FileCheck %s
+# CHECK: -1
+
+data Int  = IntCons (PrimInt);
+
+
+binding sub = \(int_i: () -> Int, int_j: () -> Int) -> Int {
+    case int_i () of
+        IntCons (iprim) -> case int_j () of
+                                IntCons(jprim) -> case primSubtract (iprim jprim) of
+                                                    r -> IntCons (r);;;
+
+};
+
+binding three = \() -> Int { IntCons (3) };
+binding four = \() -> Int { IntCons (4) };
+
+binding three_sub_four = \() -> Int { sub (three, four) };
+
+
+binding main = \() -> Boxed { 
+    case three_sub_four () of
+        IntCons (x) -> printInt (x); 
+};
