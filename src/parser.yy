@@ -24,7 +24,6 @@ void yyerror(const char *s) {
   g_lexer_success = 0;
 }
 
-std::vector<CaseAlt *> g_alts;
 std::vector<Binding *> g_toplevel_bindings;
 std::vector<Binding *> g_let_bindings;
 std::vector<DataType *> g_datatypes;
@@ -44,9 +43,6 @@ std::vector<Identifier> g_alt_destructure_vars;
 ParamList g_lambda_freevars;
 
 
-void add_alt_to_list(CaseAlt *a) {
-  g_alts.push_back(a);
-}
 
 void add_param_to_list(Parameter *p) {
   g_params.push_back(p);
@@ -60,6 +56,7 @@ void add_data_constructor_to_list(DataConstructor *b) {
 %union{
   std::vector<Atom *> *atomslist;
   std::vector<TypeName> *typeslist;
+  std::vector<stg::CaseAlt*> *altslist;
   stg::Atom *atom;
   stg::CaseAlt *alt;
   stg::Expression *expr;
@@ -107,7 +104,7 @@ void add_data_constructor_to_list(DataConstructor *b) {
 %type <dataconstructor> dataconstructor
 %type <typeraw> typeraw
 
-%type <UNDEF> altlist;
+%type <altslist> altlist;
 %type <alt> alt;
 %type <alt> altint;
 %type <alt> altvar;
@@ -189,8 +186,12 @@ atomlist: OPENPAREN atoms_ CLOSEPAREN {
 }
 
 // Alternates
-altlist: altlist alt SEMICOLON { add_alt_to_list($2); }
-         | alt SEMICOLON { add_alt_to_list($1); }
+altlist: altlist alt SEMICOLON {
+    $1->push_back($2);
+    $$ = $1;
+} | alt SEMICOLON { $$ = new std::vector<stg::CaseAlt *>();
+                   $$->push_back($1);
+}
 
 
 altint: 
@@ -299,8 +300,7 @@ expr:
     $$ = new stg::ExpressionConstructor(*$1, *$2);
     delete $1;
   }
-  | CASE expr OF altlist { $$ = new stg::ExpressionCase($2, g_alts);
-                                 g_alts.clear();}
+  | CASE expr OF altlist { $$ = new stg::ExpressionCase($2,  *$4); }
   | LET letbindings IN expr {
     $$ =  new stg::ExpressionLet(g_let_bindings, $4);
     g_let_bindings.clear();
