@@ -210,7 +210,7 @@ class AtomIdent : public Atom {
 class Expression {
    public:
     enum ExpressionKind { EK_Ap, EK_Cons, EK_Case, EK_Let, EK_IntLiteral };
-    virtual void print(std::ostream &os) const = 0;
+    virtual void print(std::ostream &os, int nest=0) const = 0;
     ExpressionKind getKind() const { return kind; }
 
     friend std::ostream &operator<<(std::ostream &os, const Expression &e) {
@@ -255,7 +255,7 @@ class ExpressionAp : public Expression {
     };
     std::string getFnName() const { return fn; }
 
-    void print(std::ostream &os) const;
+    void print(std::ostream &os, int nest=0) const;
 
     static bool classof(const Expression *E) {
         return E->getKind() == Expression::EK_Ap;
@@ -301,7 +301,7 @@ class ExpressionConstructor : public Expression {
     };
 
     ConstructorName getName() const { return name; };
-    void print(std::ostream &os) const;
+    void print(std::ostream &os, int nest=0) const;
     static bool classof(const Expression *E) {
         return E->getKind() == Expression::EK_Cons;
     }
@@ -325,7 +325,7 @@ class ExpressionLet : public Expression {
             bindings.push_back(b);
         }
     }
-    void print(std::ostream &os) const;
+    void print(std::ostream &os, int nest=0) const;
     const Expression *getRHS() const { return rhs; }
     const_iterator begin() const { return bindings.begin(); }
     const_iterator end() const { return bindings.end(); }
@@ -349,7 +349,7 @@ class ExpressionIntLiteral : public Expression {
     static bool classof(const Expression *E) {
         return E->getKind() == Expression::EK_IntLiteral;
     }
-    void print(std::ostream &os) const;
+    void print(std::ostream &os, int nest=0) const;
 };
 
 // *** Alt ***
@@ -359,7 +359,7 @@ class CaseAlt {
     const Expression *getRHS() const { return rhs; }
 
     friend std::ostream &operator<<(std::ostream &os, const CaseAlt &a);
-    virtual void print(std::ostream &os) const = 0;
+    virtual void print(std::ostream &os, int nest=0) const = 0;
 
     enum CaseAltKind { CAK_Int, CAK_Variable, CAK_Destructure, CAK_Default };
     CaseAltKind getKind() const { return kind; }
@@ -384,7 +384,7 @@ class CaseAltInt : public CaseAlt {
 
     int getLHS() const { return lhs->getVal(); }
 
-    void print(std::ostream &os) const;
+    void print(std::ostream &os, int nest=0) const;
 };
 
 class CaseAltVariable : public CaseAlt {
@@ -397,7 +397,7 @@ class CaseAltVariable : public CaseAlt {
         return a->getKind() == CaseAlt::CAK_Variable;
     }
     Identifier getLHS() const { return lhs; }
-    void print(std::ostream &os) const;
+    void print(std::ostream &os, int nest=0) const;
 };
 
 // case * of { __Constrcutor x y z -> f(x, y, z) }
@@ -428,7 +428,7 @@ class CaseAltDestructure : public CaseAlt {
     static bool classof(const CaseAlt *a) {
         return a->getKind() == CaseAlt::CAK_Destructure;
     }
-    void print(std::ostream &os) const;
+    void print(std::ostream &os, int nest=0) const;
 
     ConstructorName getConstructorName() const { return constructorName; }
 };
@@ -436,7 +436,7 @@ class CaseAltDestructure : public CaseAlt {
 class CaseAltDefault : public CaseAlt {
    public:
     CaseAltDefault(Expression *rhs) : CaseAlt(CAK_Default, rhs){};
-    void print(std::ostream &os) const;
+    void print(std::ostream &os, int nest=0) const;
     static bool classof(const CaseAlt *a) {
         return a->getKind() == CaseAlt::CAK_Default;
     }
@@ -483,7 +483,7 @@ class ExpressionCase : public Expression {
         }
     }
 
-    void print(std::ostream &os) const;
+    void print(std::ostream &os, int nest=0) const;
     static bool classof(const Expression *E) {
         return E->getKind() == Expression::EK_Case;
     }
@@ -569,7 +569,7 @@ class Lambda {
             boundparams.push_back(p);
         }
     }
-    void print(std::ostream &os) const;
+    void print(std::ostream &os, int nest=0) const;
     friend std::ostream &operator<<(std::ostream &os, const Lambda &l);
 
     const Expression *getRhs() const { return expr; }
@@ -608,6 +608,7 @@ class Binding {
     friend std::ostream &operator<<(std::ostream &os, const Binding &b);
     Identifier getName() const { return lhs; }
     const Lambda *getRhs() const { return rhs; }
+    void print(std::ostream &os, int nest=0) const;
 };
 
 // *** Program ***
