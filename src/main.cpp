@@ -957,6 +957,7 @@ Function *materializeCaseConstructorReturnFrame(
         for (Identifier id : freeVarsInAlts) {
             // HACK: need correct type info
             const StgType *ty = bctx.getIdentifier(id).stgtype;
+            errs() << "*" << __FUNCTION__ << ":" << __LINE__ << "\n";
             loadFreeVariableFromClosure(closure, id, ty, i, builder, entry,
                                         bctx);
             i++;
@@ -1074,6 +1075,7 @@ Function *materializePrimitiveCaseReturnFrame(
         for (Identifier id : freeVarsInAlts) {
             // HACK: need correct type info
             const StgType *ty = bctx.getIdentifier(id).stgtype;
+            errs() << "*" << __FUNCTION__ << ":" << __LINE__ << "\n";
             loadFreeVariableFromClosure(closure, id, ty, i, builder, entry,
                                         bctx);
             i++;
@@ -1313,6 +1315,14 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
         return vecids;
     }();
 
+    errs() << "===" << __FUNCTION__ << ":FreeVarsInAlts():===" <<  "\n";
+    cerr << *c;
+    errs() << "---free vars:---\n";
+    for(int i = 0; i < freeVarsInAlts.size(); i++) {
+        errs() << i << ":" << freeVarsInAlts[i] << "\n";
+    }
+    errs()  << "=========\n";
+
     const Expression *scrutinee = c->getScrutinee();
     const StgType *scrutineety = getTypeOfExpression(scrutinee, bctx);
 
@@ -1453,6 +1463,7 @@ Function *_materializeDynamicLetBinding(const Binding *b, Module &m,
     int i = 0;
     for (Parameter *p : b->getRhs()->free_params_range()) {
         const StgType *ty = bctx.getTypeFromRawType(p->getTypeRaw());
+        errs() << "*" << __FUNCTION__ << ":" << __LINE__ << "\n";
         loadFreeVariableFromClosure(closure, p->getName(), ty, i, builder,
                                     entry, bctx);
         i++;
