@@ -21,6 +21,7 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Support/TargetRegistry.h"
+#include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "stgir.h"
@@ -118,6 +119,10 @@ void loadFreeVariableFromClosure(Value *closure, Identifier name,
                                  const StgType *ty, int idx,
                                  StgIRBuilder builder, BasicBlock *insertBB,
                                  BuildCtx &bctx);
+
+void materializeEnterDynamicClosure(Value *V, Module &m, StgIRBuilder &builder,
+                                    BuildCtx &bctx);
+
 struct LLVMClosureData {
     AssertingVH<Function> fn;
     AssertingVH<GlobalVariable> closure;
@@ -421,7 +426,7 @@ class BuildCtx {
                 BasicBlock::Create(m.getContext(), "callnextfn", F);
             builder.SetInsertPoint(next);
             Value *cont = builder.CreateCall(popReturnCont, {}, "next_cont");
-            builder.CreateCall(enterDynamicClosure, {cont});
+            materializeEnterDynamicClosure(cont, m, builder, *this);
             builder.CreateRetVoid();
 
             builder.SetInsertPoint(entry);
@@ -681,6 +686,8 @@ class BuildCtx {
                               /*varargs = */ false),
             "enter_dynamic_closure");
 
+        F->addFnAttr(Attribute::AlwaysInline);
+
         BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
         builder.SetInsertPoint(entry);
         Argument *closureRaw = &*F->arg_begin();
@@ -700,7 +707,8 @@ class BuildCtx {
             closureRaw, builder.getInt64Ty(), "closure_addr");
         builder.CreateStore(closureAddr, bctx.enteringClosureAddr);
         // call the function
-        builder.CreateCall(cont, {});
+        CallInst *CI = builder.CreateCall(cont, {});
+        CI->setTailCallKind(CallInst::TCK_MustTail);
         builder.CreateRetVoid();
         return F;
     }
@@ -728,7 +736,7 @@ class BuildCtx {
 
         Value *RetFrame =
             builder.CreateCall(bctx.popReturnCont, {}, "return_frame");
-        builder.CreateCall(bctx.enterDynamicClosure, RetFrame);
+        materializeEnterDynamicClosure(RetFrame, m, builder, bctx);
         builder.CreateRetVoid();
 
         return new LLVMClosureData(materializeStaticClosureForFn(
@@ -779,7 +787,25 @@ void materializeEnterDynamicClosure(Value *V, Module &m, StgIRBuilder &builder,
     if (V->getType() != getRawMemTy(builder)) {
         V = builder.CreateBitCast(V, getRawMemTy(builder));
     }
-    builder.CreateCall(bctx.enterDynamicClosure, {V});
+
+    Value *closureStruct = builder.CreateBitCast(
+            V, bctx.ClosureTy[0]->getPointerTo());
+    Value *contSlot = builder.CreateGEP(
+            closureStruct, {builder.getInt64(0), builder.getInt32(0)},
+            "cont_slot");
+    Value *cont = builder.CreateLoad(contSlot, "cont");
+    // Value *contAddr = builder.CreatePtrToInt(cont,
+    // builder.getInt64Ty(), "cont_addr");
+
+    // store the address of the closure we are entering
+    Value *closureAddr = builder.CreatePtrToInt(
+            V, builder.getInt64Ty(), "closure_addr");
+    builder.CreateStore(closureAddr, bctx.enteringClosureAddr);
+    // call the function
+    CallInst *CI = builder.CreateCall(cont, {});
+    CI->setTailCallKind(CallInst::TCK_MustTail);
+
+ 
 };
 
 // As always, the one who organises things (calls the function) does the
@@ -852,7 +878,7 @@ void materializeConstructor(const ExpressionConstructor *c, Module &m,
 
     // we need to use enterDynamicClosure because we create closures for our
     // return alts as well.
-    builder.CreateCall(bctx.enterDynamicClosure, ReturnCont);
+    materializeEnterDynamicClosure(ReturnCont, m, builder, bctx);
 };
 
 // materialize destructure code for an alt over a constructor.
@@ -1659,6 +1685,16 @@ StructType *materializeDataConstructor(const DataType *decl,
 };
 
 
+unique_ptr<legacy::PassManager> buildPassPipeline(Module &m) {
+    unique_ptr<legacy::PassManager> MPM;
+    errs() << __FUNCTION__ << ":" << __LINE__ << "\n";
+    MPM->add(createAlwaysInlinerLegacyPass());
+    errs() << __FUNCTION__ << ":" << __LINE__ << "\n";
+    return MPM;
+
+}
+
+
 int compile_program(stg::Program *program, cxxopts::Options &opts) {
 
     // ask LLVM to kindly initialize all of its knowledge about targets.
@@ -1671,6 +1707,7 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
     const std::string OPTION_OUTPUT_FILENAME = opts["o"].as<std::string>();
     const bool OPTION_DUMP_LLVM = opts.count("emit-llvm") > 0;
     const bool OPTION_JIT = opts.count("jit") > 0;
+    const bool OPTION_NOOPT = opts.count("noopt") > 0;
     const TargetMachine::CodeGenFileType  OPTION_CODEGEN_FILE_TYPE = opts.count("emit-asm") ? TargetMachine::CGFT_AssemblyFile : TargetMachine::CGFT_ObjectFile;
 
     static LLVMContext ctx;
@@ -1682,6 +1719,7 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
     cerr << "Source program: ";
     cerr << *program << "\n";
     cerr << "----\n";
+    //return 0;
 
     BuildCtx bctx(*m, builder);
     Binding *entrystg = nullptr;
@@ -1722,16 +1760,38 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         builder.CreateRetVoid();
     }
 
+    cerr << "-----\n";
+    cerr << "Module(Pre optimisations):\n";
+    errs() << *m << "\n";
+    cerr << "-----\n";
+
+    // Run optimizations.
+    if (!OPTION_NOOPT) {
+        errs() << __PRETTY_FUNCTION__ << ":" << __LINE__ << "\n";
+        AnalysisManager<Module> am;
+        ModulePassManager  MPM(true);
+        MPM.addPass(AlwaysInlinerPass());
+        MPM.run(*m, am);
+
+    }
+
+
+    // remove this function, because it otherwise creates an error (due to the presence of musttail).
+    Function *F = bctx.enterDynamicClosure;
+    bctx.enterDynamicClosure = nullptr;
+    F->eraseFromParent();
+
 
     if (verifyModule(*m, nullptr) == 1) {
         cerr << "-----\n";
-        cerr << "Module:\n";
+        cerr << "Module(Post optimisations):\n";
         errs() << *m << "\n";
         cerr << "-----\n";
         cerr << " *** Broken module found, aborting compilation.\nError:\n";
         verifyModule(*m, &errs());
         exit(1);
     }
+
 
     std::error_code errcode;
     llvm::raw_fd_ostream outputFile(OPTION_OUTPUT_FILENAME, errcode,
