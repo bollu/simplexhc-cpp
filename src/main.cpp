@@ -133,7 +133,7 @@ struct LLVMValueData {
     LLVMValueData(Value *v, const StgType *stgtype) : v(v), stgtype(stgtype) {}
 };
 
-LLVMClosureData materializeTopLevelStaticBinding(const Binding *b, Module &m,
+LLVMClosureData materializeEmptyTopLevelStaticBinding(const Binding *b, Module &m,
                                                  StgIRBuilder &builder,
                                                  BuildCtx &bctx);
 
@@ -1396,7 +1396,7 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
 //   pop c
 //
 
-// Copied from materializeTopLevelStaticBinding - consider merging with.
+// Copied from materializeEmptyTopLevelStaticBinding - consider merging with.
 Value *_allocateLetBindingDynamicClosure(const Binding *b, BasicBlock *BB,
                                          Module &m, StgIRBuilder builder,
                                          BuildCtx &bctx) {
@@ -1440,8 +1440,8 @@ void loadFreeVariableFromClosure(Value *closure, Identifier name,
 
 // Materialize the function that gets executed when a let-binding is
 // evaluated. NOTE: this is exactly the same thing as
-// materializeTopLevelStaticBinding, except that it also creates a static
-// closure. Consider mergining with materializeTopLevelStaticBinding
+// materializeEmptyTopLevelStaticBinding, except that it also creates a static
+// closure. Consider mergining with materializeEmptyTopLevelStaticBinding
 Function *_materializeDynamicLetBinding(const Binding *b, Module &m,
                                         StgIRBuilder builder, BuildCtx &bctx) {
     FunctionType *FTy =
@@ -1613,7 +1613,7 @@ LLVMClosureData materializeStaticClosureForFn(Function *F, std::string name,
 }
 
 // Create a top-level static binding from a "binding" that is parsed in STG.
-LLVMClosureData materializeTopLevelStaticBinding(const Binding *b, Module &m,
+LLVMClosureData materializeEmptyTopLevelStaticBinding(const Binding *b, Module &m,
                                                  StgIRBuilder &builder,
                                                  BuildCtx &bctx) {
     assert(b->getRhs()->free_params_size() == 0 &&
@@ -1623,10 +1623,6 @@ LLVMClosureData materializeTopLevelStaticBinding(const Binding *b, Module &m,
     Function *F =
         Function::Create(FTy, GlobalValue::ExternalLinkage, b->getName(), &m);
 
-    BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
-    builder.SetInsertPoint(entry);
-    materializeLambda(b->getRhs(), m, builder, bctx);
-    builder.CreateRetVoid();
 
     return materializeStaticClosureForFn(F, b->getName() + "_closure", m,
                                          builder, bctx);
@@ -1692,16 +1688,32 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         }
     }
 
+
+    // First, create empty top level bindings and insert them.
+    // This is so that when we codegen the bindings, we can have recusion,
+    // mututal recursion, and all that fun stuff.
+    std::map<Binding *,  LLVMClosureData>bindingToClosure;
     for (Binding *b : program->bindings_range()) {
         if (b->getName() == "main") {
             assert(!entrystg && "program has more than one main.");
             entrystg = b;
         }
+        const LLVMClosureData cls =  materializeEmptyTopLevelStaticBinding(b, *m, builder, bctx);
+        bindingToClosure.insert(std::make_pair(b, cls));
 
         bctx.insertTopLevelBinding(
-                b->getName(), createStgTypeForLambda(b->getRhs(), bctx),
-                materializeTopLevelStaticBinding(b, *m, builder, bctx));
+                b->getName(), createStgTypeForLambda(b->getRhs(), bctx), cls);
     }
+
+    for(auto It: bindingToClosure) {
+        Function *F = It.second.fn;
+        const Binding *b = It.first;
+        BasicBlock *entry = BasicBlock::Create(m->getContext(), "entry", F);
+        builder.SetInsertPoint(entry);
+        materializeLambda(b->getRhs(), *m, builder, bctx);
+        builder.CreateRetVoid();
+    }
+
 
     if (verifyModule(*m, nullptr) == 1) {
         cerr << "-----\n";

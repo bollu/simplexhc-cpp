@@ -1,0 +1,40 @@
+# RUN: %loadSimplexhc %s  --jit | FileCheck %s
+# CHECK: 24
+
+data Int  = IntCons (PrimInt);
+
+binding mult = \(int_a: () -> Int, int_b: () -> Int) -> Int {
+    case int_a () of
+        IntCons (iprim) -> case int_b () of
+                                IntCons(jprim) -> case primMultiply (iprim jprim) of
+                                                    r -> IntCons (r);;;
+};
+
+binding sub = \(int_i: () -> Int, int_j: () -> Int) -> Int {
+    case int_i () of
+        IntCons (iprim) -> case int_j () of
+                                IntCons(jprim) -> case primSubtract (iprim jprim) of
+                                                    r -> IntCons (r);;;
+
+};
+
+binding one = \() -> Int { IntCons (1) };
+binding four = \() -> Int { IntCons (4) };
+
+binding factorial = \(fint: () -> Int) -> Int {
+    case fint () of
+        IntCons (fint_prim) -> case fint_prim () of
+                                    0 -> IntCons (1);
+                                    r -> let
+                                            binding fint_dec = \(fint: () -> Int) () -> Int { sub (fint one) };
+                                            binding factorial_dec = \(fint_dec: () -> Int) () -> Int { factorial (fint_dec) };
+                                         in mult (fint factorial_dec);;
+};
+
+
+binding factorial_four = \() -> Int { factorial (four) };
+
+binding main = \() -> Boxed { 
+    case factorial_four () of
+        IntCons (x) -> printInt (x); 
+};
