@@ -27,6 +27,8 @@ binding add = \(int_i2: () -> Int, int_j2: () -> Int) -> Int {
 
 binding zero = \() -> Int { IntCons (0) };
 binding one = \() -> Int { IntCons (1) };
+binding two = \() -> Int { IntCons (2) };
+binding three = \() -> Int { IntCons (3) };
 binding four = \() -> Int { IntCons (4) };
 
 binding ackerman = \(aint: () -> Int, bint: () -> Int) -> Int {
@@ -36,17 +38,17 @@ binding ackerman = \(aint: () -> Int, bint: () -> Int) -> Int {
                             aval -> case bint () of
                                         IntCons (bprim) -> case bprim () of
                                                                 0 -> let
-                                                                        binding adec = \(aint: () -> Int) -> Int { sub (aint one) };
+                                                                        binding adec = \(aint: () -> Int) () -> Int { sub (aint one) };
                                                                      in ackerman (adec one);
                                                                 bval -> let
-                                                                            binding bdec = \(bint: () -> Int) -> Int { sub (bint one) };
-                                                                            binding adec = \(aint: () -> Int) -> Int { sub (aint one) };
-                                                                            binding bnew = \(aint: () -> Int, bdec: Boxed) -> Int { ackerman (aint bdec) };
+                                                                            binding bdec = \(bint: () -> Int) () -> Int { sub (bint one) };
+                                                                            binding adec = \(aint: () -> Int) () -> Int { sub (aint one) };
+                                                                            binding bnew = \(aint: () -> Int, bdec: Boxed) () -> Int { ackerman (aint bdec) };
                                                                         in ackerman (adec bnew);;;;
 };
 
 
 binding main = \() -> Boxed { 
-    case ackerman (one zero) of
+    case ackerman (three one) of
         IntCons (x) -> printInt (x); 
 };
