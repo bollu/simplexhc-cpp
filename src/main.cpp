@@ -1231,7 +1231,7 @@ std::set<Identifier> getFreeVarsInExpression(
             for(const Binding *b : let->bindings_range()) {
                 const Lambda *l = b->getRhs();
                 for(const Parameter *p : l->free_params_range()) {
-                    freeVars.insert(p->getName());
+                    lambdaFree.insert(p->getName());
                 }
             }
             std::set_difference(lambdaFree.begin(), lambdaFree.end(),
