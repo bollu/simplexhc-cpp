@@ -200,6 +200,7 @@ class Scope {
             inner.getValue()->insert(k, v);
         else {
             assert(m.find(k) == m.end());
+            errs() << "insert " << k << " => " << *v.v << "\n";
             m.insert(std::make_pair(k, v));
         }
     }
@@ -446,9 +447,7 @@ class BuildCtx {
     // map a binding to a function in the given scope.
     void insertTopLevelBinding(std::string name, const StgType *returnTy,
                                LLVMClosureData bdata) {
-        errs() << "name: " << name << "\n";
         assert(staticBindingMap.find(name) == staticBindingMap.end());
-        errs() << "name: " << name << "\n\n";
         staticBindingMap.insert(std::make_pair(name, bdata));
 
         LLVMValueData vdata(&*bdata.closure, returnTy);
@@ -478,6 +477,8 @@ class BuildCtx {
             assert(false && "unable to find identifier");
         }
         assert(It != identifiermap.end());
+
+        errs() << "Identifier(" << ident <<") -> " << *It->second.v << "\n";
         return It->second;
     }
 
@@ -766,7 +767,6 @@ Value *materializeAtom(const Atom *a, StgIRBuilder &builder, BuildCtx &bctx) {
 
 void materializeEnterDynamicClosure(Value *V, Module &m, StgIRBuilder &builder,
                                     BuildCtx &bctx) {
-    errs() << "V : " << *V << "\n\n";
     assert(V->getType()->isPointerTy());
     if (V->getType() != getRawMemTy(builder)) {
         V = builder.CreateBitCast(V, getRawMemTy(builder));
@@ -883,6 +883,7 @@ void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
 
         if (bctx.getTypeFromName(cons->getTypeName(i)) == bctx.getPrimIntTy()) {
             Value *V = builder.CreateLoad(Slot, "cons_" + std::to_string(i));
+            errs() << "*" << __FUNCTION__ << ":" << __LINE__ <<  "\n";
             bctx.insertIdentifier(var, LLVMValueData(V, bctx.getPrimIntTy()));
         } else {
             Value *V = builder.CreateLoad(
@@ -890,6 +891,7 @@ void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
             V = builder.CreateIntToPtr(V, getRawMemTy(builder),
                                        "cons_rawmem_" + std::to_string(i));
             const StgType *Ty = bctx.getTypeFromName(cons->getTypeName(i));
+            errs() << "*" << __FUNCTION__ << ":" << __LINE__ <<  "\n";
             bctx.insertIdentifier(var, LLVMValueData(V, Ty));
         }
         i++;
@@ -1029,6 +1031,7 @@ Function *materializeCaseConstructorReturnFrame(
                 const StgType *ty =
                     getTypeOfExpression(c->getScrutinee(), bctx);
                 BuildCtx::Scoper s(bctx);
+                errs() << "*" << __FUNCTION__ << ":" << __LINE__ <<"\n";
                 bctx.insertIdentifier(altVariable->getLHS(),
                                       LLVMValueData(raw, ty));
                 materializeExpr(altVariable->getRHS(), m, builder, bctx);
@@ -1047,6 +1050,7 @@ Function *materializeCaseConstructorReturnFrame(
 Function *materializePrimitiveCaseReturnFrame(
     const ExpressionCase *c, const std::vector<Identifier> freeVarsInAlts,
     Module &m, StgIRBuilder builder, BuildCtx &bctx) {
+    errs() << "*" << __FUNCTION__ << "\n";
     std::stringstream namess;
     namess << "case_" << *c->getScrutinee() << "_alts";
 
@@ -1131,6 +1135,7 @@ Function *materializePrimitiveCaseReturnFrame(
         builder.SetInsertPoint(defaultBB);
         // create a binding between the scrutinee and the variable name of
         // the alt.
+        errs() << "*" << __FUNCTION__ << ":" << __LINE__ <<  "\n";
         bctx.insertIdentifier(cv->getLHS(),
                               LLVMValueData(scrutinee, bctx.getPrimIntTy()));
         materializeExpr(cv->getRHS(), m, builder, bctx);
@@ -1142,6 +1147,7 @@ Function *materializePrimitiveCaseReturnFrame(
         Function *trap = getOrCreateFunction(
             m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
         builder.CreateCall(trap, {});
+        builder.CreateRetVoid();
     }
     return F;
 }
@@ -1152,8 +1158,12 @@ static const StgType *getTypeOfExpression(const Expression *e,
         case Expression::EK_Ap: {
             const ExpressionAp *ap = cast<ExpressionAp>(e);
             const std::string fnName = ap->getFnName();
+            const StgType *CalledTy = bctx.getIdentifier(fnName).stgtype;
+            if (CalledTy == bctx.getPrimIntTy())
+                return bctx.getPrimIntTy();
+
             const StgFunctionType *Fty =
-                cast<StgFunctionType>(bctx.getIdentifier(fnName).stgtype);
+                cast<StgFunctionType>(CalledTy);
             return Fty->getReturnType();
             break;
         }
@@ -1202,8 +1212,32 @@ std::set<Identifier> getFreeVarsInExpression(
                 extractIdentifierFromAtom(freeVars, a);
             break;
         }
-        case Expression::EK_Let:
-            assert(false && "unimplemented");
+        case Expression::EK_Let: {
+            errs() << __FUNCTION__ << ":" << __LINE__ << "\n";
+            const ExpressionLet *let = cast<ExpressionLet>(e);
+            errs() << __FUNCTION__ << ":" << __LINE__ << "\n";
+
+            // a let binding encloses all of the let defined
+            // variables inside it, so we can remove those from the
+            // free variables the let bindings uses.
+            std::set<Identifier> bindingNames;
+            std::set<Identifier> lambdaFree;
+            for (const Binding *b : let->bindings_range()) {
+                bindingNames.insert(b->getName());
+            }
+
+            for(const Binding *b : let->bindings_range()) {
+                const Lambda *l = b->getRhs();
+                for(const Parameter *p : l->free_params_range()) {
+                    freeVars.insert(p->getName());
+                }
+            }
+            std::set_difference(lambdaFree.begin(), lambdaFree.end(),
+                                bindingNames.begin(), bindingNames.end(),
+                                std::inserter(freeVars, freeVars.begin()));
+
+            break;
+        }
         case Expression::EK_Case: {
             const ExpressionCase *c = cast<ExpressionCase>(e);
             // HACK: do not consider scrutinee as free. This is a HACK -_-"
@@ -1390,6 +1424,7 @@ void loadFreeVariableFromClosure(Value *closure, Identifier name,
         v = builder.CreateIntToPtr(v, getRawMemTy(builder), name + "_rawmem");
     }
 
+    errs() << "*" << __FUNCTION__ << ":" << __LINE__ << "\n";
     bctx.insertIdentifier(name, LLVMValueData(v, ty));
 }
 
@@ -1438,6 +1473,7 @@ StgFunctionType *createStgTypeForLambda(const Lambda *l, const BuildCtx &bctx) {
 
 void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
                     BuildCtx &bctx) {
+    errs() << "*" << __FUNCTION__ << "\n";
     BasicBlock *Entry = builder.GetInsertBlock();
 
     // Open a new scope.---
@@ -1455,6 +1491,7 @@ void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
         // consider the type of a let-binding to be the return type. Is this
         // cheating? Sure.
         assert(true && "what type do I assign to a let-binding?");
+        errs() << "*" << __FUNCTION__ << ":" << __LINE__ <<  "\n";
         bctx.insertIdentifier(b->getName(), LLVMValueData(cls, bindingty));
     }
 
@@ -1533,11 +1570,13 @@ void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
         if (Ty == bctx.getPrimIntTy()) {
             Value *pv =
                 builder.CreateCall(bctx.popInt, {}, "param_" + p->getName());
+            errs() << "*" << __FUNCTION__ << ":" << __LINE__ <<  "\n";
             bctx.insertIdentifier(p->getName(),
                                   LLVMValueData(pv, bctx.getPrimIntTy()));
         } else {
             Value *pv =
                 builder.CreateCall(bctx.popBoxed, {}, "param_" + p->getName());
+            errs() << "*" << __FUNCTION__ << ":" << __LINE__ <<  "\n";
             bctx.insertIdentifier(p->getName(), LLVMValueData(pv, Ty));
         }
     }
