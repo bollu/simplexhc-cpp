@@ -1,0 +1,25 @@
+# RUN: %loadSimplexhc %s  --jit | FileCheck %s
+# CHECK: 7
+#
+# ack :: Int -> Int -> Int
+# ack 0 n = n+1
+# ack m 0 = ack (m - 1) 1
+# ack m n = ack (m - 1) (ack m (n - 1))
+
+binding ackerman = \(aint: PrimInt, bint: PrimInt) -> PrimInt {
+    case aint () of
+            0 -> primAdd (bint 1);
+            aval -> case bint () of
+                0 -> case primSubtract (aval 1) of
+                        adec -> ackerman (adec 1);;
+                bval -> case primSubtract (bval 1) of
+                            bdec -> case primSubtract (aval 1) of
+                                        adec -> case ackerman (aval bdec) of
+                                                    bnew -> ackerman (adec bnew);;;;;
+};
+
+
+binding main = \() -> Boxed { 
+    case ackerman (2 2) of
+        x -> printInt (x); 
+};
