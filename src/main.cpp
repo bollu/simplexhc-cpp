@@ -169,9 +169,7 @@ static AssertingVH<Function> createNewFunction(Module &m, FunctionType *FTy,
         errs() << "Function with name:(" << name << ") already exists:\n";
         F->print(errs());
         errs() << "\n";
-        assert(false && "function with name already exists.\n");
     }
-
     return Function::Create(FTy, GlobalValue::ExternalLinkage, name, &m);
 }
 
