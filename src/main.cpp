@@ -23,6 +23,8 @@
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Transforms/Utils/ModuleUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "stgir.h"
 #include "jit.h"
@@ -42,6 +44,7 @@ using namespace llvm;
 class BuildCtx;
 
 typedef void (*SimplexhcMainTy)(void);
+typedef void (*SimplexhcInitRawmemConstructorTy)(void);
 
 class StgType {
    public:
@@ -330,11 +333,7 @@ class BuildCtx {
         populateIntrinsicTypes(m, builder, dataTypeMap, dataConstructorMap,
                                primIntTy, boxedTy);
 
-        malloc = createNewFunction(
-            m,
-            FunctionType::get(builder.getInt8Ty()->getPointerTo(),
-                              {builder.getInt64Ty()}, false),
-            "malloc");
+        malloc = createAllocator(m, builder, *this);
         // *** Int ***
         addStack(m, builder, builder.getInt64Ty(), "Int", STACK_SIZE, pushInt,
                  popInt, stackInt, stackIntTop);
@@ -756,6 +755,97 @@ class BuildCtx {
         identifiermap.insert(fnName, LLVMValueData(data.closure, functionType));
         return data;
     }
+
+    static Function *createAllocator(Module &m, StgIRBuilder builder, BuildCtx &bctx) {
+        Function *realMalloc = createNewFunction(
+            m,
+            FunctionType::get(builder.getInt8Ty()->getPointerTo(),
+                              {builder.getInt64Ty()}, false),
+            "malloc");
+
+        GlobalVariable *rawHeapMemory = new GlobalVariable(m, builder.getInt8Ty()->getPointerTo(),
+                /*isConstant=*/false,
+                                                           GlobalValue::ExternalLinkage,
+                                                           ConstantPointerNull::get(builder.getInt8Ty()->getPointerTo()),
+                                                           "rawHeapMemory");
+
+        GlobalVariable *heapMemoryTop = new GlobalVariable(m,
+                                                           builder.getInt64Ty(),
+                /*isConstant=*/false,
+                                                           GlobalValue::ExternalLinkage,
+                                                           ConstantInt::get(builder.getInt64Ty(), 0),
+                                                           "rawHeapMemoryTop");
+
+
+        static const uint64_t HEAP_SIZE = 1ull /*bytes*/ *  1024ull /*kb*/ * 1024ull /*mb*/ * 1024ull /*gb*/ * 800ull;
+        std::cout<< "HEAP_SIZE: " << HEAP_SIZE << "\n";
+        static const uint64_t HEAP_SIZE_SAFETY = HEAP_SIZE - 512ull; // 1024 /*kb*/ * 1024 /*mb*/ * 1024 /*gb*/ * 5;
+        std::cout<< "HEAP_SIZE_SAFETY: " << HEAP_SIZE_SAFETY << "\n";
+
+        // initialize for the global chunk of memory.
+        {
+            
+            Function *memInitializer = createNewFunction(m, FunctionType::get(builder.getVoidTy(), false), "init_rawmem_constructor");
+            appendToGlobalCtors(m, memInitializer, 0, rawHeapMemory);
+            BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", memInitializer);
+            builder.SetInsertPoint(entry);
+            Value *rawmem = builder.CreateCall(realMalloc, {builder.getInt64(HEAP_SIZE)}, "rawmem");
+            builder.CreateStore(rawmem, rawHeapMemory);
+            builder.CreateStore(builder.getInt64(0), heapMemoryTop);
+            builder.CreateRetVoid();
+        }
+
+
+
+        {
+            Function *alloc = createNewFunction(
+                    m,
+                    FunctionType::get(builder.getInt8Ty()->getPointerTo(),
+                        {builder.getInt64Ty()}, false),
+                    "alloc");
+            BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", alloc);
+            builder.SetInsertPoint(entry);
+
+            Value *prevTop = builder.CreateLoad(heapMemoryTop, "prevTopSlot");
+            Value *memBottom = builder.CreateLoad(rawHeapMemory, "memBottom");
+            errs() << "memBottom: " << *memBottom << "\n";
+            Value *mem = builder.CreateGEP(memBottom, {prevTop}, "memIndexed");
+            errs() << "mem: " << *mem << "\n";
+
+            Argument *memSize = alloc->arg_begin();
+            memSize->setName("size");
+
+            // size = floor((size + (ALIGNMENT - 1)) / ALIGNMENT) * ALIGNMENT
+            // Value *sizeAligned = builder.CreateNUWMul(sizeBumped, builder.getInt64(ALIGNMENT), "sizeAligned");
+            static const int ALIGNMENT = 4;
+            Value *sizeBumped = builder.CreateAdd(memSize, builder.getInt64(ALIGNMENT - 1), "sizeBumped");
+            Value *sizeFloor = builder.CreateUDiv(sizeBumped, builder.getInt64(ALIGNMENT), "sizeFloored");
+            Value *sizeAligned = builder.CreateNUWMul(sizeBumped, builder.getInt64(ALIGNMENT), "sizeAligned");
+            Value *newTop = builder.CreateAdd(prevTop, sizeAligned, "newTop");
+            builder.CreateStore(newTop, heapMemoryTop);
+
+            Value *outOfMemory = builder.CreateICmpUGT(newTop, builder.getInt64(HEAP_SIZE_SAFETY), "outOfMemory");
+
+            BasicBlock *retBB = BasicBlock::Create(m.getContext(), "ret", alloc);
+            builder.SetInsertPoint(retBB);
+            builder.CreateRet(mem);
+
+            BasicBlock *trapBB = BasicBlock::Create(m.getContext(), "trap", alloc);
+            builder.SetInsertPoint(trapBB);
+            Function *trap = getOrCreateFunction(
+                    m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
+            builder.CreateCall(trap, {});
+            builder.CreateRet(mem);
+
+
+            builder.SetInsertPoint(entry);
+            builder.CreateCondBr(outOfMemory, trapBB, retBB);
+
+            return alloc;
+        }
+        
+
+    }
 };
 
 Value *materializeAtomInt(const AtomInt *i, StgIRBuilder &builder,
@@ -786,23 +876,8 @@ void materializeEnterDynamicClosure(Value *V, Module &m, StgIRBuilder &builder,
         V = builder.CreateBitCast(V, getRawMemTy(builder));
     }
 
-    Value *closureStruct = builder.CreateBitCast(
-            V, bctx.ClosureTy[0]->getPointerTo());
-    Value *contSlot = builder.CreateGEP(
-            closureStruct, {builder.getInt64(0), builder.getInt32(0)},
-            "cont_slot");
-    Value *cont = builder.CreateLoad(contSlot, "cont");
-    // Value *contAddr = builder.CreatePtrToInt(cont,
-    // builder.getInt64Ty(), "cont_addr");
-
-    // store the address of the closure we are entering
-    Value *closureAddr = builder.CreatePtrToInt(
-            V, builder.getInt64Ty(), "closure_addr");
-    builder.CreateStore(closureAddr, bctx.enteringClosureAddr);
-    // call the function
-    CallInst *CI = builder.CreateCall(cont, {});
+    CallInst *CI = builder.CreateCall(bctx.enterDynamicClosure, {V});
     CI->setTailCallKind(CallInst::TCK_MustTail);
-
  
 };
 
@@ -1683,16 +1758,6 @@ StructType *materializeDataConstructor(const DataType *decl,
 };
 
 
-unique_ptr<legacy::PassManager> buildPassPipeline(Module &m) {
-    unique_ptr<legacy::PassManager> MPM;
-    errs() << __FUNCTION__ << ":" << __LINE__ << "\n";
-    MPM->add(createAlwaysInlinerLegacyPass());
-    errs() << __FUNCTION__ << ":" << __LINE__ << "\n";
-    return MPM;
-
-}
-
-
 int compile_program(stg::Program *program, cxxopts::Options &opts) {
 
     // ask LLVM to kindly initialize all of its knowledge about targets.
@@ -1705,7 +1770,7 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
     const std::string OPTION_OUTPUT_FILENAME = opts["o"].as<std::string>();
     const bool OPTION_DUMP_LLVM = opts.count("emit-llvm") > 0;
     const bool OPTION_JIT = opts.count("jit") > 0;
-    const bool OPTION_NOOPT = opts.count("noopt") > 0;
+
     const TargetMachine::CodeGenFileType  OPTION_CODEGEN_FILE_TYPE = opts.count("emit-asm") ? TargetMachine::CGFT_AssemblyFile : TargetMachine::CGFT_ObjectFile;
 
     static LLVMContext ctx;
@@ -1719,7 +1784,8 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
     cerr << "----\n";
     //return 0;
 
-    BuildCtx bctx(*m, builder);
+    BuildCtx *bctxPtr = new BuildCtx(*m, builder);
+    BuildCtx &bctx = *bctxPtr;
     Binding *entrystg = nullptr;
     for (DataType *datatype : program->datatypes_range()) {
         assert(datatype->constructors_size() > 0);
@@ -1758,27 +1824,52 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         builder.CreateRetVoid();
     }
 
-    cerr << "-----\n";
-    cerr << "Module(Pre optimisations):\n";
-    errs() << *m << "\n";
-    cerr << "-----\n";
 
-    // Run optimizations.
-    if (!OPTION_NOOPT) {
-        errs() << __PRETTY_FUNCTION__ << ":" << __LINE__ << "\n";
-        AnalysisManager<Module> am;
-        ModulePassManager  MPM(true);
-        MPM.addPass(AlwaysInlinerPass());
-        MPM.run(*m, am);
+    {
+        PassBuilder PB;
+        ModulePassManager MPM; //  = PB.buildModuleOptimizationPipeline(PassBuilder::O3);;
+        FunctionPassManager FPM; //  = PB.buildFunctionSimplificationPipeline(PassBuilder::O3, PassBuilder::ThinLTOPhase::None);
+        CGSCCPassManager CGSCCPM;
 
+        LoopAnalysisManager LAM;
+        FunctionAnalysisManager FAM;
+        CGSCCAnalysisManager CGAM;
+        ModuleAnalysisManager MAM;
+
+        PB.registerModuleAnalyses(MAM);
+        PB.registerCGSCCAnalyses(CGAM);
+        PB.registerFunctionAnalyses(FAM);
+        PB.registerLoopAnalyses(LAM);
+        PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+
+
+         MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
+         MPM.addPass(createModuleToPostOrderCGSCCPassAdaptor(std::move(CGSCCPM)));
+         MPM.addPass(AlwaysInlinerPass());
+
+        for(int i = 0; i < 10; i++) {
+            MPM.run(*m, MAM);
+        }
     }
 
-
-    // remove this function, because it otherwise creates an error (due to the presence of musttail).
+    // We need to erase enterDynamicClosure, because it is actually
+    // slightly _broken_ IR. In the sense that, it cannot actually
+    // musttail.
+    //
+    // musttail void enter_dynamic_closure(f: (() -> ())*) {
+    //     ...
+    //     musttail f()
+    // }
+    //
+    //     This musttail is incorrect because the signatures of
+    //     enter_dynamic_closure and f don't match.
+    //     However, we ensure that after inlining enter_dynamic_closure,
+    //     the signatures work out.
     Function *F = bctx.enterDynamicClosure;
     bctx.enterDynamicClosure = nullptr;
     F->eraseFromParent();
 
+    delete bctxPtr;
 
     if (verifyModule(*m, nullptr) == 1) {
         cerr << "-----\n";
@@ -1844,6 +1935,16 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         errs() << "JIT: executing module:\n";
         SimpleJIT jit;
         SimpleJIT::ModuleHandle H = jit.addModule(CloneModule(m.get()));
+        Expected<JITTargetAddress> memConstructor = jit.findSymbol("init_rawmem_constructor").getAddress();
+        if (!memConstructor) {
+            errs() << "unable to find `init_rawmem_constructor` in given module:\n";
+            m->print(outs(), nullptr);
+            exit(1);
+        };
+
+        SimplexhcInitRawmemConstructorTy rawmemConstructor = (SimplexhcInitRawmemConstructorTy) memConstructor.get();
+        rawmemConstructor();
+
         Expected<JITTargetAddress> maybeMain = jit.findSymbol("main").getAddress();
         if (!maybeMain) {
             errs() << "unable to find `main` in given module:\n";
