@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
+set -o xtrace
 set -e
 SIMPLEXHC=../build/sxhc
 LIBSTGPATH=../build/
 LLC=llc
-CC=clang
+CC=gcc
 
 OUTO=$1".out.o"
 
