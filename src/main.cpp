@@ -738,7 +738,7 @@ class BuildCtx {
         builder.CreateRetVoid();
 
         return new LLVMClosureData(materializeStaticClosureForFn(
-            F, "closure_primMultiply", m, builder, bctx));
+            F, "closure_" + name, m, builder, bctx));
     }
 
     LLVMClosureData createPrimFunction(
