@@ -461,6 +461,11 @@ class ExpressionCase : public Expression {
         bool hasDefaultAlt = false;
         for (const CaseAlt *alt : this->alts) {
             if (isa<CaseAltDefault>(alt)) {
+                if (hasDefaultAlt) {
+                    std::cerr << "invalid case expression:\n";
+                    this->print(std::cerr, 0);
+                }
+
                 assert(!hasDefaultAlt &&
                        "Case expression has multiple default alts!");
                 hasDefaultAlt = true;
@@ -470,6 +475,10 @@ class ExpressionCase : public Expression {
         bool hasVariableAlt = false;
         for (const CaseAlt *alt : this->alts) {
             if (isa<CaseAltVariable>(alt)) {
+                if (hasVariableAlt) {
+                    std::cerr << "invalid case expression:\n";
+                    this->print(std::cerr, 0);
+                }
                 assert(!hasVariableAlt &&
                        "Case expression has multiple variable alts!");
                 hasVariableAlt = true;
