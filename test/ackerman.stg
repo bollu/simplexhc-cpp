@@ -1,5 +1,5 @@
 # RUN: %loadSimplexhc %s  --jit | FileCheck %s
-# CHECK: 3
+# CHECK: 11
 #
 # ack :: Int -> Int -> Int
 # ack 0 n = n+1
@@ -30,6 +30,8 @@ binding one = \() -> Int { IntCons (1) };
 binding two = \() -> Int { IntCons (2) };
 binding three = \() -> Int { IntCons (3) };
 binding four = \() -> Int { IntCons (4) };
+binding five = \() -> Int { IntCons (5) };
+binding eleven = \() -> Int { IntCons (11) };
 
 binding ackerman = \(aint: () -> Int, bint: () -> Int) -> Int {
     case aint () of
@@ -49,6 +51,6 @@ binding ackerman = \(aint: () -> Int, bint: () -> Int) -> Int {
 
 
 binding main = \() -> Boxed { 
-    case ackerman (three one) of
+    case ackerman (two four) of
         IntCons (x) -> printInt (x); 
 };
