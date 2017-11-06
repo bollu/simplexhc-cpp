@@ -1,6 +1,7 @@
 #include <iostream>
 #include <set>
 #include <sstream>
+#include "sxhc/RuntimeDebugBuilder.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -104,7 +105,6 @@ class StgFunctionType : public StgType {
     }
 };
 
-using StgIRBuilder = IRBuilder<>;
 
 void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
                      BuildCtx &bctx);
@@ -282,7 +282,7 @@ class Scope {
     }
 };
 
-static const int STACK_SIZE = 5000;
+static const int STACK_SIZE = 50000;
 
 class BuildCtx {
    public:
@@ -629,11 +629,11 @@ class BuildCtx {
             GlobalValue::ExternalLinkage,
             ConstantInt::get(builder.getInt64Ty(), 0), "stack" + name + "Top");
 
-        addPushToModule(m, builder, pushFn, stackTop, stack);
+        addPushToModule(m, builder, size, pushFn, stackTop, stack);
         addPopToModule(m, builder, popFn, stackTop, stack);
     }
 
-    static void addPushToModule(Module &m, StgIRBuilder &builder, Function *F,
+    static void addPushToModule(Module &m, StgIRBuilder &builder, size_t size, Function *F,
                                 Value *stackTop, Value *stack) {
         assert(F);
         assert(stackTop);
@@ -645,13 +645,34 @@ class BuildCtx {
         for (Argument &arg : F->args()) {
             arg.setName("i");
             Value *idx = builder.CreateLoad(stackTop, "idx");
+
+            // success
+            BasicBlock *success = BasicBlock::Create(m.getContext(), "success", F);
+            builder.SetInsertPoint(success);
             Value *stackSlot =
                 builder.CreateGEP(stack, {builder.getInt64(0), idx}, "slot");
             builder.CreateStore(&arg, stackSlot);
 
-            idx = builder.CreateAdd(idx, builder.getInt64(1), "idx_inc");
-            builder.CreateStore(idx, stackTop);
+            Value *idxInc = builder.CreateAdd(idx, builder.getInt64(1), "idx_inc");
+            builder.CreateStore(idxInc, stackTop);
             builder.CreateRetVoid();
+
+            // failure--
+            BasicBlock *failure = BasicBlock::Create(m.getContext(), "failure", F);
+            builder.SetInsertPoint(failure);
+            sxhc::RuntimeDebugBuilder::createCPUPrinter(builder, "ran out of stack: ", F->getName(), "| size:" ,  std::to_string(size), "\n");
+            Function *trap = getOrCreateFunction(
+                    m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
+            builder.CreateCall(trap);
+            builder.CreateUnreachable();
+
+            
+            // entry--
+            static const int SAFETY = 5;
+            builder.SetInsertPoint(entry);
+            Value *isInbounds = builder.CreateICmpULE(idx, builder.getInt64(size - 1 - SAFETY), "is_idx_inbounds");
+            builder.CreateCondBr(isInbounds, success, failure);
+
         }
     }
 
