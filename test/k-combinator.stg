@@ -2,7 +2,7 @@
 # CHECK: 4
 
 data Int  = Int2 (PrimInt PrimInt);
-binding k = \(x:Int y:Int) -> Boxed { printInt (x) };
+binding k = \(x: PrimInt y:PrimInt) -> Boxed { printInt (x) };
 binding three = \() -> Int { Int2 (3 4) };
 binding main = \() -> Boxed { case three () of
                                 Int2 (x y) ->  k (y x);
