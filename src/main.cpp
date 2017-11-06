@@ -798,9 +798,10 @@ class BuildCtx {
                                                            "rawHeapMemoryTop");
 
 
-        static const uint64_t HEAP_SIZE = 1ull /*bytes*/ *  1024ull /*kb*/ * 1024ull /*mb*/ * 1024ull /*gb*/ * 800ull;
+        static const uint64_t HEAP_SIZE = 1ull /*bytes*/ *  1024ull /*kb*/ * 1024ull /*mb*/ * 1024ull /*gb*/ * 32ull;
         std::cout<< "HEAP_SIZE: " << HEAP_SIZE << "\n";
-        static const uint64_t HEAP_SIZE_SAFETY = HEAP_SIZE - 512ull; // 1024 /*kb*/ * 1024 /*mb*/ * 1024 /*gb*/ * 5;
+        static const uint64_t HEAP_SIZE_SAFETY = 1ull /*bytes*/ *  1024ull /*kb*/ * 1024ull /*mb*/ * 1024ull /*gb*/ * 31ull;
+        // static const uint64_t HEAP_SIZE_SAFETY = HEAP_SIZE - 512ull; // 1024 /*kb*/ * 1024 /*mb*/ * 1024 /*gb*/ * 5;
         std::cout<< "HEAP_SIZE_SAFETY: " << HEAP_SIZE_SAFETY << "\n";
 
         // initialize for the global chunk of memory.
