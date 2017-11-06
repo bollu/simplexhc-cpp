@@ -90,6 +90,7 @@ int main(int argc, char **argv) {
             ("emit-asm", "Emit assembly.")
             ("jit", "JIT compiles and runs the input file.")
             ("o,output-filepath", "Output file path.", cxxopts::value<std::string>()->default_value("-"))
+            ("O,optlevel", "Optimization level", cxxopts::value<std::string>()->default_value("3"))
             ("version", "version information.")
             ("help", "print help.")
             ("positional-container", "Continer for positional args.", cxxopts::value<std::vector<std::string>>())

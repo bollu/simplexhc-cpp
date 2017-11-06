@@ -1792,6 +1792,7 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
     const std::string OPTION_OUTPUT_FILENAME = opts["o"].as<std::string>();
     const bool OPTION_DUMP_LLVM = opts.count("emit-llvm") > 0;
     const bool OPTION_JIT = opts.count("jit") > 0;
+    const int OPTION_OPTIMISATION_LEVEL = opts["O"].as<int>();
 
     const TargetMachine::CodeGenFileType  OPTION_CODEGEN_FILE_TYPE = opts.count("emit-asm") ? TargetMachine::CGFT_AssemblyFile : TargetMachine::CGFT_ObjectFile;
 
