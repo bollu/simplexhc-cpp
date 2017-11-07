@@ -326,7 +326,12 @@ class BuildCtx {
     // pointer to offset to top of return stack.
     AssertingVH<GlobalVariable> stackReturnContTop;
 
-    BuildCtx(Module &m, StgIRBuilder &builder) {
+    GlobalVariable *llvmNoDebug;
+    bool nodebug;
+
+    BuildCtx(Module &m, StgIRBuilder &builder, bool nodebug) : nodebug(nodebug) {
+        llvmNoDebug = new GlobalVariable(m, builder.getInt1Ty(), /*isConstant=*/ true, GlobalValue::ExternalLinkage, builder.getInt1(nodebug), "nodebug");
+
         // *** ContTy ***
         ContTy = FunctionType::get(builder.getVoidTy(), {}, false);
 
@@ -336,16 +341,16 @@ class BuildCtx {
         malloc = createAllocator(m, builder, *this);
         // *** Int ***
         addStack(m, builder, builder.getInt64Ty(), "Int", STACK_SIZE, pushInt,
-                 popInt, stackInt, stackIntTop);
+                 popInt, stackInt, stackIntTop, llvmNoDebug);
 
         // type of returns.
         addStack(m, builder, getRawMemTy(builder), "Return", STACK_SIZE,
                  pushReturnCont, popReturnCont, stackReturnCont,
-                 stackReturnContTop);
+                 stackReturnContTop, llvmNoDebug);
 
         // *** Heap ***
         addStack(m, builder, getRawMemTy(builder), "Boxed", STACK_SIZE,
-                 pushBoxed, popBoxed, stackBoxed, stackBoxedTop);
+                 pushBoxed, popBoxed, stackBoxed, stackBoxedTop, llvmNoDebug);
 
         // *** enteringClosureAddr ***
         enteringClosureAddr = new GlobalVariable(
@@ -609,7 +614,8 @@ class BuildCtx {
                          AssertingVH<Function> &pushFn,
                          AssertingVH<Function> &popFn,
                          AssertingVH<GlobalVariable> &stack,
-                         AssertingVH<GlobalVariable> &stackTop) {
+                         AssertingVH<GlobalVariable> &stackTop,
+                         GlobalVariable *llvmNoDebug) {
         popFn = createNewFunction(
             m, FunctionType::get(elemTy, /*isVarArg=*/false), "pop" + name);
         pushFn =
@@ -629,12 +635,12 @@ class BuildCtx {
             GlobalValue::ExternalLinkage,
             ConstantInt::get(builder.getInt64Ty(), 0), "stack" + name + "Top");
 
-        addPushToModule(m, builder, size, pushFn, stackTop, stack);
-        addPopToModule(m, builder, popFn, stackTop, stack);
+        addPushToModule(m, builder, size, pushFn, stackTop, stack, llvmNoDebug);
+        addPopToModule(m, builder, popFn, stackTop, stack, llvmNoDebug);
     }
 
     static void addPushToModule(Module &m, StgIRBuilder &builder, size_t size, Function *F,
-                                Value *stackTop, Value *stack) {
+                                Value *stackTop, Value *stack, Value *llvmNoDebug) {
         assert(F);
         assert(stackTop);
         assert(stack);
@@ -672,12 +678,15 @@ class BuildCtx {
         static const int SAFETY = 5;
         builder.SetInsertPoint(entry);
         Value *isInbounds = builder.CreateICmpULE(idx, builder.getInt64(size - 1 - SAFETY), "is_idx_inbounds");
+        Value *nodebug = builder.CreateLoad(llvmNoDebug, "nodebug");
+
+        isInbounds = builder.CreateOr(isInbounds, nodebug, "guard_nodebug");
         builder.CreateCondBr(isInbounds, success, failure);
 
     }
 
     static void addPopToModule(Module &m, StgIRBuilder &builder, Function *F,
-                               Value *stackTop, Value *stack) {
+                               Value *stackTop, Value *stack, Value *llvmNoDebug) {
         assert(F);
         assert(stackTop);
         assert(stack);
@@ -688,6 +697,8 @@ class BuildCtx {
         Value *idxPrev = builder.CreateLoad(stackTop, "idx");
         Value *idxCur = builder.CreateSub(idxPrev, builder.getInt64(1), "idx_dec");
         Value *isInbounds = builder.CreateICmpSGE(idxCur, builder.getInt64(0), "isGeqZero");
+        Value *nodebug = builder.CreateLoad(llvmNoDebug, "nodebug");
+        isInbounds = builder.CreateOr(isInbounds, nodebug, "guard_nodebug");
 
         // --success
         BasicBlock *success = BasicBlock::Create(m.getContext(), "success", F);
@@ -1810,7 +1821,13 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
     const std::string OPTION_OUTPUT_FILENAME = opts["o"].as<std::string>();
     const bool OPTION_DUMP_LLVM = opts.count("emit-llvm") > 0;
     const bool OPTION_JIT = opts.count("jit") > 0;
-    const int OPTION_OPTIMISATION_LEVEL = opts["O"].as<int>();
+    const int OPTION_OPTIMISATION_LEVEL = [&opts] {
+        if (!opts.count("O")) return 0;
+        int opt =  opts["O"].as<int>();
+        assert(opt >= 0 && "-O levels can only be -O{0, 1, 2, 3}");
+        assert(opt <= 3 && "-O levels can only be -O{0, 1, 2, 3}");
+        return 3;
+    }();
 
     const TargetMachine::CodeGenFileType  OPTION_CODEGEN_FILE_TYPE = opts.count("emit-asm") ? TargetMachine::CGFT_AssemblyFile : TargetMachine::CGFT_ObjectFile;
 
@@ -1825,7 +1842,7 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
     cerr << "----\n";
     //return 0;
 
-    BuildCtx *bctxPtr = new BuildCtx(*m, builder);
+    BuildCtx *bctxPtr = new BuildCtx(*m, builder, /*nodebug=*/ OPTION_OPTIMISATION_LEVEL > 0);
     BuildCtx &bctx = *bctxPtr;
     Binding *entrystg = nullptr;
     for (DataType *datatype : program->datatypes_range()) {
@@ -1868,9 +1885,17 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
 
     {
         PassBuilder PB;
-        ModulePassManager MPM; //  = PB.buildModuleOptimizationPipeline(PassBuilder::O3);;
-        FunctionPassManager FPM; //  = PB.buildFunctionSimplificationPipeline(PassBuilder::O3, PassBuilder::ThinLTOPhase::None);
+
+        ModulePassManager MPM;
+        FunctionPassManager FPM;
         CGSCCPassManager CGSCCPM;
+
+        PassBuilder::OptimizationLevel optimisationLevel = static_cast<PassBuilder::OptimizationLevel>((unsigned)PassBuilder::OptimizationLevel::O0 + OPTION_OPTIMISATION_LEVEL);
+
+        if (optimisationLevel > 0) {
+            MPM = PB.buildModuleOptimizationPipeline(optimisationLevel);;
+            FPM = PB.buildFunctionSimplificationPipeline(optimisationLevel, PassBuilder::ThinLTOPhase::None);
+        }
 
         LoopAnalysisManager LAM;
         FunctionAnalysisManager FAM;
