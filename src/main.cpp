@@ -301,7 +301,6 @@ class BuildCtx {
     // TODO: do this when you have more free time :)
     // using ClosureTagMap = std::map<ClosureTag, AssertingVH<GlobalVariable>>;
 
-    AssertingVH<Function> popInt, pushInt;
     AssertingVH<Function> pushBoxed, popBoxed;
     LLVMClosureData *printInt;
     LLVMClosureData *primMultiply;
@@ -342,6 +341,9 @@ class BuildCtx {
         // *** Int ***
         addStack(m, builder, builder.getInt64Ty(), "Int", STACK_SIZE, pushInt,
                  popInt, stackInt, stackIntTop, llvmNoDebug);
+
+        pushInt->setCallingConv(CallingConv::Fast);
+        popInt->setCallingConv(CallingConv::Fast);
 
         // type of returns.
         addStack(m, builder, getRawMemTy(builder), "Return", STACK_SIZE,
@@ -417,7 +419,7 @@ class BuildCtx {
 
             BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
             builder.SetInsertPoint(entry);
-            Value *i = builder.CreateCall(popInt, {}, "i");
+            Value *i = this->createPopInt(builder, "i");
             builder.CreateCall(printOnlyInt, {i});
 
             BasicBlock *exit = BasicBlock::Create(m.getContext(), "exit", F);
@@ -454,6 +456,18 @@ class BuildCtx {
         // delete this->stackReturnContTop;
         // delete this->stackInt;
         // delete this->stackIntTop;
+    }
+
+    void createPushInt(StgIRBuilder &builder, Value *Int) const {
+        CallInst *CI = builder.CreateCall(this->pushInt, {Int});
+        CI->setCallingConv(CallingConv::Fast);
+
+    };
+
+    Value *createPopInt(StgIRBuilder &builder, std::string name) const {
+        CallInst *CI = builder.CreateCall(this->popInt, {}, name);
+        CI->setCallingConv(CallingConv::Fast);
+        return CI;
     }
 
     // Return the PrimInt type.
@@ -575,6 +589,7 @@ class BuildCtx {
     };
 
    private:
+    AssertingVH<Function> pushInt, popInt;
     friend class Scoper;
 
     // push a scope for identifier resolution
@@ -777,12 +792,12 @@ class BuildCtx {
                               name);
         BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
         builder.SetInsertPoint(entry);
-        Value *i = builder.CreateCall(bctx.popInt, {}, "i");
-        Value *j = builder.CreateCall(bctx.popInt, {}, "j");
+        Value *i = bctx.createPopInt(builder, "i");
+        Value *j = bctx.createPopInt(builder, "j");
         Value *result = FResultBuilder(builder, i, j); // builder.CreateMul(i, j, "result");
         result->setName("result");
 
-        builder.CreateCall(bctx.pushInt, {result});
+        bctx.createPushInt(builder, result);
 
         Value *RetFrame =
             builder.CreateCall(bctx.popReturnCont, {}, "return_frame");
@@ -942,12 +957,12 @@ void materializeAp(const ExpressionAp *ap, Module &m, StgIRBuilder &builder,
     for (Atom *p : ap->params_reverse_range()) {
         Value *v = materializeAtom(p, builder, bctx);
         if (isa<AtomInt>(p)) {
-            builder.CreateCall(bctx.pushInt, {v});
+            bctx.createPushInt(builder, v);
         } else {
             LLVMValueData vdata =
                 bctx.getIdentifier(cast<AtomIdent>(p)->getIdent());
             if (vdata.stgtype == bctx.getPrimIntTy()) {
-                builder.CreateCall(bctx.pushInt, {v});
+                bctx.createPushInt(builder, v);
             } else {
                 v = builder.CreateBitCast(v, getRawMemTy(builder));
                 builder.CreateCall(bctx.pushBoxed, {v});
@@ -1241,7 +1256,7 @@ Function *materializePrimitiveCaseReturnFrame(
     }
     // **** COPY PASTE END
 
-    Value *scrutinee = builder.CreateCall(bctx.popInt, {}, "scrutinee");
+    Value *scrutinee = bctx.createPopInt(builder, "scrutinee");
     BasicBlock *defaultBB =
         BasicBlock::Create(m.getContext(), "alt_default", F);
     SwitchInst *switchInst = builder.CreateSwitch(scrutinee, defaultBB);
@@ -1283,7 +1298,7 @@ Function *materializePrimitiveCaseReturnFrame(
     if (const CaseAltDefault *cd = c->getDefaultAlt()) {
         builder.SetInsertPoint(defaultBB);
         // push the scrutinee back because this is the "default" version.
-        builder.CreateCall(bctx.pushInt, {scrutinee});
+        bctx.createPushInt(builder, scrutinee);
         materializeExpr(cd->getRHS(), m, builder, bctx);
         // create ret void.
         builder.SetInsertPoint(defaultBB);
@@ -1696,7 +1711,7 @@ void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
 // int.
 void materializeEnterInt(Value *v, std::string contName, Module &m,
                          StgIRBuilder &builder, BuildCtx &bctx) {
-    builder.CreateCall(bctx.pushInt, {v});
+    bctx.createPushInt(builder, v);
     Value *cont =
         builder.CreateCall(bctx.popReturnCont, {}, "return_cont_" + contName);
     materializeEnterDynamicClosure(cont, m, builder, bctx);
@@ -1737,8 +1752,7 @@ void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
     for (const Parameter *p : l->bound_params_range()) {
         const StgType *Ty = bctx.getTypeFromRawType(p->getTypeRaw());
         if (Ty == bctx.getPrimIntTy()) {
-            Value *pv =
-                builder.CreateCall(bctx.popInt, {}, "param_" + p->getName());
+            Value *pv = bctx.createPopInt(builder, "param_" + p->getName());
             errs() << "*" << __FUNCTION__ << ":" << __LINE__ <<  "\n";
             bctx.insertIdentifier(p->getName(),
                                   LLVMValueData(pv, bctx.getPrimIntTy()));
