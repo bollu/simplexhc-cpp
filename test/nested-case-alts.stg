@@ -1,0 +1,19 @@
+# Check that a case with a literal scrutinee `pi` works.
+# RUN: %loadSimplexhc %s  --jit | FileCheck %s
+# CHECK: 10
+
+data Int  = IntCons (PrimInt);
+binding f = \(aprim: PrimInt, bprim: PrimInt) -> Int {
+    case aprim () of
+        0 -> IntCons (1);
+        aother -> case bprim () of
+                    0 -> IntCons (10);
+                    bother -> IntCons(20);;
+};
+
+
+binding main = \() -> Boxed { case f (1 0)  of
+                                IntCons (x) -> printInt (x); 
+                            };
+
+

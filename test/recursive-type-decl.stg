@@ -1,0 +1,6 @@
+# RUN: %loadSimplexhc %s  --jit | FileCheck %s
+# CHECK: 5
+# Check that we can declare a recursive type.
+
+data List  = ListCons (PrimInt List);
+binding main = \() -> Boxed { printInt (5) };
