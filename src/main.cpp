@@ -1177,14 +1177,11 @@ Function *materializeCaseConstructorReturnFrame(
                 // the _variable_ case after all.
                 // TODO: copy checks from generate prim int to here.
                 switch_->setDefaultDest(bb);
-                Value *raw = builder.CreateCall(bctx.popInt, {},
-                                                altVariable->getLHS() + "_raw");
                 const StgType *ty =
                     getTypeOfExpression(c->getScrutinee(), bctx);
                 BuildCtx::Scoper s(bctx);
-                errs() << "*" << __FUNCTION__ << ":" << __LINE__ <<"\n";
                 bctx.insertIdentifier(altVariable->getLHS(),
-                                      LLVMValueData(raw, ty));
+                                      LLVMValueData(rawmem, ty));
                 materializeExpr(altVariable->getRHS(), m, builder, bctx);
                 builder.CreateRetVoid();
 
