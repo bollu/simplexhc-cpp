@@ -1,2 +1,4 @@
 *
 !*.stg
+!lit.cfg
+!lit.site.cfg.in
