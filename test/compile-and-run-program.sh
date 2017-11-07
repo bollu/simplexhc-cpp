@@ -8,7 +8,7 @@ CC=gcc
 
 OUTO=$1".out.o"
 
-$SIMPLEXHC  $1 -o $OUTO
+$SIMPLEXHC  $1 -o $OUTO ${@:2}
 $CC $OUTO -L $LIBSTGPATH -lstgruntime -o $1.out
 rm $OUTO
 
