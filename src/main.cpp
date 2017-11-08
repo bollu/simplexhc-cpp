@@ -1866,7 +1866,7 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         int opt =  opts["O"].as<int>();
         assert(opt >= 0 && "-O levels can only be -O{0, 1, 2, 3}");
         assert(opt <= 3 && "-O levels can only be -O{0, 1, 2, 3}");
-        return 3;
+        return opt;
     }();
 
     const TargetMachine::CodeGenFileType  OPTION_CODEGEN_FILE_TYPE = opts.count("emit-asm") ? TargetMachine::CGFT_AssemblyFile : TargetMachine::CGFT_ObjectFile;
