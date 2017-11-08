@@ -474,6 +474,7 @@ class BuildCtx {
     Value *createPushReturn(StgIRBuilder &builder, Value *Cont) const {
         CallInst *CI = builder.CreateCall(this->pushReturnCont, {Cont});
         CI->setCallingConv(CallingConv::Fast);
+        return CI;
 
     }
 
