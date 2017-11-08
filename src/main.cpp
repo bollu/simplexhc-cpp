@@ -305,7 +305,6 @@ class BuildCtx {
     LLVMClosureData *printInt;
     LLVMClosureData *primMultiply;
     AssertingVH<Function> malloc;
-    AssertingVH<Function> pushReturnCont, popReturnCont;
     AssertingVH<GlobalVariable> stackInt;
     AssertingVH<GlobalVariable> stackIntTop;
 
@@ -429,7 +428,8 @@ class BuildCtx {
             BasicBlock *next =
                 BasicBlock::Create(m.getContext(), "callnextfn", F);
             builder.SetInsertPoint(next);
-            Value *cont = builder.CreateCall(popReturnCont, {}, "next_cont");
+            Value *cont = this->createPopReturn(builder, "next_cont");
+
             materializeEnterDynamicClosure(cont, m, builder, *this);
             builder.CreateRetVoid();
 
@@ -468,6 +468,20 @@ class BuildCtx {
         CallInst *CI = builder.CreateCall(this->popInt, {}, name);
         CI->setCallingConv(CallingConv::Fast);
         return CI;
+    }
+
+    Value *createPushReturn(StgIRBuilder &builder, Value *Cont) const {
+        CallInst *CI = builder.CreateCall(this->pushReturnCont, {Cont});
+        CI->setCallingConv(CallingConv::Fast);
+
+    }
+
+    CallInst *createPopReturn(StgIRBuilder &builder, std::string name) const {
+        CallInst *CI = builder.CreateCall(this->popReturnCont, {}, name);
+        CI->setCallingConv(CallingConv::Fast);
+        CI->addAttribute(0, llvm::Attribute::NoAlias);
+        return CI;
+
     }
 
     // Return the PrimInt type.
@@ -590,6 +604,7 @@ class BuildCtx {
 
    private:
     AssertingVH<Function> pushInt, popInt;
+    AssertingVH<Function> pushReturnCont, popReturnCont;
     friend class Scoper;
 
     // push a scope for identifier resolution
@@ -804,8 +819,7 @@ class BuildCtx {
 
         bctx.createPushInt(builder, result);
 
-        Value *RetFrame =
-            builder.CreateCall(bctx.popReturnCont, {}, "return_frame");
+        Value *RetFrame = bctx.createPopReturn(builder, "return_frame");
         materializeEnterDynamicClosure(RetFrame, m, builder, bctx);
         builder.CreateRetVoid();
 
@@ -1023,8 +1037,7 @@ void materializeConstructor(const ExpressionConstructor *c, Module &m,
     builder.CreateCall(bctx.pushBoxed, {rawMem});
 
     // now pop a continuation off the return stack and invoke it
-    Value *ReturnCont =
-        builder.CreateCall(bctx.popReturnCont, {}, "returncont");
+    Value *ReturnCont = bctx.createPopReturn(builder, "returncont");
 
     // we need to use enterDynamicClosure because we create closures for our
     // return alts as well.
@@ -1544,7 +1557,7 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
         i++;
     }
 
-    builder.CreateCall(bctx.pushReturnCont, {clsRaw});
+    bctx.createPushReturn(builder, clsRaw);
     materializeExpr(scrutinee, m, builder, bctx);
 
     // clean this up, I should need this epilogue for materializeExpr in the
@@ -1724,8 +1737,7 @@ void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
 void materializeEnterInt(Value *v, std::string contName, Module &m,
                          StgIRBuilder &builder, BuildCtx &bctx) {
     bctx.createPushInt(builder, v);
-    Value *cont =
-        builder.CreateCall(bctx.popReturnCont, {}, "return_cont_" + contName);
+    Value *cont = bctx.createPopReturn(builder, "return_cont_" + contName);
     materializeEnterDynamicClosure(cont, m, builder, bctx);
 }
 
