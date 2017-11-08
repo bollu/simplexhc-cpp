@@ -473,15 +473,12 @@ class BuildCtx {
 
     Value *createPushReturn(StgIRBuilder &builder, Value *Cont) const {
         CallInst *CI = builder.CreateCall(this->pushReturnCont, {Cont});
-        CI->setCallingConv(CallingConv::Fast);
         return CI;
 
     }
 
     CallInst *createPopReturn(StgIRBuilder &builder, std::string name) const {
         CallInst *CI = builder.CreateCall(this->popReturnCont, {}, name);
-        CI->setCallingConv(CallingConv::Fast);
-        CI->addAttribute(0, llvm::Attribute::NoAlias);
         return CI;
 
     }
