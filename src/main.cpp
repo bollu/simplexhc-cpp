@@ -877,6 +877,9 @@ class BuildCtx {
                     FunctionType::get(builder.getInt8Ty()->getPointerTo(),
                         {builder.getInt64Ty()}, false),
                     "alloc");
+
+            alloc->addFnAttr(Attribute::NoInline);
+
             BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", alloc);
             builder.SetInsertPoint(entry);
 
@@ -1514,11 +1517,13 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
         }
     }();
 
-    Value *clsRaw =
+    CallInst *clsRaw =
         builder.CreateCall(bctx.malloc,
                            {builder.getInt64(m.getDataLayout().getTypeAllocSize(
                                bctx.ClosureTy[freeVarsInAlts.size()]))},
                            "closure_raw");
+    clsRaw->addAttribute(0, llvm::Attribute::NoAlias);
+
     Value *clsTyped = builder.CreateBitCast(
         clsRaw, bctx.ClosureTy[freeVarsInAlts.size()]->getPointerTo(),
         "closure_typed");
