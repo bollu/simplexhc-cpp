@@ -2,6 +2,7 @@
 #include <set>
 #include <sstream>
 #include "sxhc/RuntimeDebugBuilder.h"
+#include "sxhc/stgir.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -27,7 +28,6 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
-#include "stgir.h"
 #include "jit.h"
 #include "cxxopts.hpp"
  
@@ -638,6 +638,11 @@ class BuildCtx {
                               FunctionType::get(builder.getVoidTy(), {elemTy},
                                                 /*isVarArg=*/false),
                               "push" + name);
+
+        // Disable inlining of push/pop so that we can inspect it.
+        pushFn->addFnAttr(llvm::Attribute::NoInline);
+        popFn->addFnAttr(llvm::Attribute::NoInline);
+
         Type *stackTy = ArrayType::get(elemTy, size);
         // Constant *Init = ConstantAggregateZero::get(stackTy);
         stack = new GlobalVariable(
@@ -1622,6 +1627,8 @@ Function *_materializeDynamicLetBinding(const Binding *b, Module &m,
     Function *F =
         Function::Create(FTy, GlobalValue::ExternalLinkage, b->getName(), &m);
 
+    F->addFnAttr(llvm::Attribute::AlwaysInline);
+
     BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
     builder.SetInsertPoint(entry);
 
@@ -1794,7 +1801,7 @@ LLVMClosureData materializeEmptyTopLevelStaticBinding(const Binding *b, Module &
         FunctionType::get(builder.getVoidTy(), /*isVarArg=*/false);
     Function *F =
         Function::Create(FTy, GlobalValue::ExternalLinkage, b->getName(), &m);
-
+    F->addFnAttr(llvm::Attribute::AlwaysInline);
 
     return materializeStaticClosureForFn(F, b->getName() + "_closure", m,
                                          builder, bctx);

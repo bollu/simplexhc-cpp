@@ -4,7 +4,7 @@
 #include <iostream>
 #include <string>
 #include <stdio.h>
-#include "stgir.h"
+#include "sxhc/stgir.h"
 #include "llvm/Support/CommandLine.h"
 #include "cxxopts.hpp"
 #include <cstdio>

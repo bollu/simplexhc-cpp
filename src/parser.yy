@@ -3,7 +3,7 @@
 #include <stack>
 #include <iostream>
 #include <vector>
-#include "stgir.h"
+#include "sxhc/stgir.h"
 
 using namespace std;
 
