@@ -53,6 +53,13 @@ add_library(stgruntime
     SHARED lib/libstg.c)
 set_target_properties(stgruntime PROPERTIES C_STANDARD 99)
 
+
+
+#sxhcpasses, so they can be loaded into opt
+add_library(sxhcpasses SHARED lib/optimizer.cpp)
+target_link_libraries(sxhcpasses ${LLVM_LIBS} -lstdc++)
+set_target_properties(sxhcpasses PROPERTIES CXX_STANDARD 14)
+
 # DOXYGEN
 # first we can indicate the documentation build as an option and set it to ON by default
 option(BUILD_DOC "Build documentation" OFF)

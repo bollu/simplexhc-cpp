@@ -3,6 +3,7 @@
 #include <sstream>
 #include "sxhc/RuntimeDebugBuilder.h"
 #include "sxhc/stgir.h"
+#include "sxhc/optimizer.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -1947,11 +1948,15 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
 
 
+        // FPM.addPass(StackMatcherPass("Return"));
+        // FPM.addPass(StackMatcherPass("Int"));
+
+        // Fix the IR first, then run optimisations.
+        MPM.addPass(AlwaysInlinerPass());
          MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
          MPM.addPass(createModuleToPostOrderCGSCCPassAdaptor(std::move(CGSCCPM)));
-         MPM.addPass(AlwaysInlinerPass());
 
-        for(int i = 0; i < 10; i++) {
+        for(int i = 0; i < 1; i++) {
             MPM.run(*m, MAM);
         }
     }
