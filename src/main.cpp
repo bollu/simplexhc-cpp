@@ -44,6 +44,7 @@ using namespace stg;
 using namespace llvm;
 
 class BuildCtx;
+class AliasCtx;
 
 typedef void (*SimplexhcMainTy)(void);
 typedef void (*SimplexhcInitRawmemConstructorTy)(void);
@@ -285,8 +286,23 @@ class Scope {
 
 static const int STACK_SIZE = 50000;
 
+class AliasCtx {
+    MDTuple *returnContScopeDomain;
+public:
+    AliasCtx(Module &m) {
+        returnContScopeDomain = MDTuple::getDistinct(m.getContext(), {});
+        errs() << "returnContScopeDomain: " << *returnContScopeDomain << "\n";
+    }
+
+    MDNode *getReturnContScopeDomain() const {
+        return returnContScopeDomain;
+    }
+};
+
 class BuildCtx {
    public:
+    AliasCtx aliasctx;
+
     using IdentifierMapTy = Scope<Identifier, LLVMValueData>;
 
     using StaticBindingMapTy = std::map<Identifier, LLVMClosureData>;
@@ -328,7 +344,7 @@ class BuildCtx {
     GlobalVariable *llvmNoDebug;
     bool nodebug;
 
-    BuildCtx(Module &m, StgIRBuilder &builder, bool nodebug) : nodebug(nodebug) {
+    BuildCtx(Module &m, StgIRBuilder &builder, bool nodebug) : nodebug(nodebug), aliasctx(m) {
         llvmNoDebug = new GlobalVariable(m, builder.getInt1Ty(), /*isConstant=*/ true, GlobalValue::ExternalLinkage, builder.getInt1(nodebug), "nodebug");
 
         // *** ContTy ***
@@ -1529,12 +1545,16 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
         }
     }();
 
+    // NamedMDNode *alias_metadata = getNamedMetadata();
+
     CallInst *clsRaw =
         builder.CreateCall(bctx.malloc,
                            {builder.getInt64(m.getDataLayout().getTypeAllocSize(
                                bctx.ClosureTy[freeVarsInAlts.size()]))},
                            "closure_raw");
-    clsRaw->addAttribute(0, llvm::Attribute::NoAlias);
+    clsRaw->addAttribute(AttributeList::ReturnIndex, llvm::Attribute::NoAlias);
+    assert(clsRaw->returnDoesNotAlias());
+
 
     Value *clsTyped = builder.CreateBitCast(
         clsRaw, bctx.ClosureTy[freeVarsInAlts.size()]->getPointerTo(),
