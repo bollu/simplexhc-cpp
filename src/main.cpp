@@ -31,7 +31,9 @@
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "jit.h"
 #include "cxxopts.hpp"
- 
+#include "llvm/IR/MDBuilder.h"
+
+
 using namespace llvm;
 
 // The - option defaults to opening STDOUT;
@@ -127,6 +129,14 @@ void loadFreeVariableFromClosure(Value *closure, Identifier name,
 
 void materializeEnterDynamicClosure(Value *V, Module &m, StgIRBuilder &builder,
                                     BuildCtx &bctx);
+
+
+// Set AA metadata if the value is an instruction.
+void setValueAAMetadata(Value *V, const AAMDNodes &N) {
+    if (Instruction *I = dyn_cast<Instruction>(V))
+        I->setAAMetadata(N);
+
+}
 
 struct LLVMClosureData {
     AssertingVH<Function> fn;
@@ -287,15 +297,21 @@ class Scope {
 static const int STACK_SIZE = 50000;
 
 class AliasCtx {
-    MDTuple *returnContScopeDomain;
+    MDNode *caseClosureScopeList;
+    MDNode* caseClosureScopeDomain;
+    MDNode *caseClosureScope;
+    AAMDNodes *caseClosureScopeAAMD;
 public:
     AliasCtx(Module &m) {
-        returnContScopeDomain = MDTuple::getDistinct(m.getContext(), {});
-        errs() << "returnContScopeDomain: " << *returnContScopeDomain << "\n";
+        MDBuilder builder(m.getContext());
+        caseClosureScopeDomain = builder.createAliasScopeDomain("caseClosureScopeDomain");
+        caseClosureScope = builder.createAliasScope("caseClosureScope", caseClosureScopeDomain);
+        caseClosureScopeList = MDTuple::get(m.getContext(), {caseClosureScope});
+        caseClosureScopeAAMD = new AAMDNodes(nullptr, caseClosureScopeList, nullptr);
     }
 
-    MDNode *getReturnContScopeDomain() const {
-        return returnContScopeDomain;
+    const AAMDNodes &getCaseClosureScopeAAMD() const {
+        return *caseClosureScopeAAMD;
     }
 };
 
@@ -346,6 +362,9 @@ class BuildCtx {
 
     BuildCtx(Module &m, StgIRBuilder &builder, bool nodebug) : nodebug(nodebug), aliasctx(m) {
         llvmNoDebug = new GlobalVariable(m, builder.getInt1Ty(), /*isConstant=*/ true, GlobalValue::ExternalLinkage, builder.getInt1(nodebug), "nodebug");
+
+        MDBuilder mdbuilder(m.getContext());
+        invariantGroupNode = mdbuilder.createAnonymousAliasScopeDomain("closure_invariant_group");
 
         // *** ContTy ***
         ContTy = FunctionType::get(builder.getVoidTy(), {}, false);
@@ -451,8 +470,10 @@ class BuildCtx {
             builder.CreateRetVoid();
 
             builder.SetInsertPoint(entry);
-            Value *returnTop =
+            LoadInst *returnTop =
                 builder.CreateLoad(this->stackReturnContTop, "nReturnFrames");
+            returnTop->setMetadata(LLVMContext::MD_invariant_group, this->getInvariantGroupNode());
+
             Value *haveReturnFrames = builder.CreateICmpUGT(
                 returnTop, builder.getInt64(1), "haveReturnFrames");
             builder.CreateCondBr(haveReturnFrames, next, exit);
@@ -606,6 +627,11 @@ class BuildCtx {
         report_fatal_error("unknown type name");
     }
 
+    MDNode *getInvariantGroupNode () {
+        assert(invariantGroupNode);
+        return invariantGroupNode;
+    }
+
     // Class to create and destroy a scope with RAII.
     class Scoper {
        public:
@@ -635,6 +661,8 @@ class BuildCtx {
 
     StgDataType *primIntTy;
     StgDataType *boxedTy;
+
+    MDNode *invariantGroupNode = nullptr;
 
     static void populateIntrinsicTypes(Module &m, StgIRBuilder &builder,
                                        TypeMapTy &typemap,
@@ -695,6 +723,10 @@ class BuildCtx {
         assert(stackTop);
         assert(stack);
 
+        // If the stack is a stack of pointer things, then we should tag the parameter with a readonly.
+        if (stackTop->getType()->getPointerElementType()->isPointerTy())
+            F->addParamAttr(0, llvm::Attribute::ReadOnly);
+
         BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
         builder.SetInsertPoint(entry);
         // pushInt has only one argument
@@ -708,7 +740,8 @@ class BuildCtx {
         builder.SetInsertPoint(success);
         Value *stackSlot =
             builder.CreateGEP(stack, {builder.getInt64(0), idx}, "slot");
-        builder.CreateStore(arg, stackSlot);
+        StoreInst *SI = builder.CreateStore(arg, stackSlot);
+        // SI->setMetadata(LLVMContext::MD_invariant_group, this->getInvariantGroupNode())
 
         Value *idxInc = builder.CreateAdd(idx, builder.getInt64(1), "idx_inc");
         builder.CreateStore(idxInc, stackTop);
@@ -786,6 +819,7 @@ class BuildCtx {
                               /*varargs = */ false),
             "enter_dynamic_closure");
 
+        //F->addFnAttr(Attribute::NoInline);
         F->addFnAttr(Attribute::AlwaysInline);
 
         BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
@@ -798,7 +832,9 @@ class BuildCtx {
         Value *contSlot = builder.CreateGEP(
             closureStruct, {builder.getInt64(0), builder.getInt32(0)},
             "cont_slot");
-        Value *cont = builder.CreateLoad(contSlot, "cont");
+        LoadInst *cont = builder.CreateLoad(contSlot, "cont");
+        cont->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
+
         // Value *contAddr = builder.CreatePtrToInt(cont,
         // builder.getInt64Ty(), "cont_addr");
 
@@ -1033,7 +1069,8 @@ void materializeConstructor(const ExpressionConstructor *c, Module &m,
     const int Tag = cons->getParent()->getIndexForConstructor(cons);
     Value *tagIndex = builder.CreateGEP(
         typedMem, {builder.getInt64(0), builder.getInt32(0)}, "tag_index");
-    builder.CreateStore(builder.getInt64(Tag), tagIndex);
+    StoreInst *SI = builder.CreateStore(builder.getInt64(Tag), tagIndex);
+    SI->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
 
     // Push values into the constructed value
     unsigned i = 1;
@@ -1046,7 +1083,8 @@ void materializeConstructor(const ExpressionConstructor *c, Module &m,
         Value *v = materializeAtom(a, builder, bctx);
         v->setName("param_" + std::to_string(i));
         v = TransmuteToInt(v, builder);
-        builder.CreateStore(v, indexedMem);
+        StoreInst *SI = builder.CreateStore(v, indexedMem);
+        SI->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
         i++;
     }
     builder.CreateCall(bctx.pushBoxed, {rawMem});
@@ -1094,13 +1132,15 @@ void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
             builder.CreateGEP(StructPtr, Idxs, "slot_int_" + std::to_string(i));
 
         if (bctx.getTypeFromName(cons->getTypeName(i)) == bctx.getPrimIntTy()) {
-            Value *V = builder.CreateLoad(Slot, "cons_" + std::to_string(i));
+            LoadInst *LI = builder.CreateLoad(Slot, "cons_" + std::to_string(i));
+            LI->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
             errs() << "*" << __FUNCTION__ << ":" << __LINE__ <<  "\n";
-            bctx.insertIdentifier(var, LLVMValueData(V, bctx.getPrimIntTy()));
+            bctx.insertIdentifier(var, LLVMValueData(LI, bctx.getPrimIntTy()));
         } else {
-            Value *V = builder.CreateLoad(
+            LoadInst *LI = builder.CreateLoad(
                 Slot, "cons_mem_as_int_" + std::to_string(i));
-            V = builder.CreateIntToPtr(V, getRawMemTy(builder),
+            LI->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
+            Value *V = builder.CreateIntToPtr(V, getRawMemTy(builder),
                                        "cons_rawmem_" + std::to_string(i));
             const StgType *Ty = bctx.getTypeFromName(cons->getTypeName(i));
             errs() << "*" << __FUNCTION__ << ":" << __LINE__ <<  "\n";
@@ -1160,8 +1200,9 @@ Function *materializeCaseConstructorReturnFrame(
     // materializeDynamicLetBinding Open a new scope.
     BuildCtx::Scoper s(bctx);
     if (freeVarsInAlts.size() > 0) {
-        Value *closureAddr =
+        LoadInst *closureAddr =
             builder.CreateLoad(bctx.enteringClosureAddr, "closure_addr_int");
+        closureAddr->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
         Value *closure = builder.CreateIntToPtr(
             closureAddr, bctx.ClosureTy[freeVarsInAlts.size()]->getPointerTo(),
             "closure_typed");
@@ -1192,7 +1233,8 @@ Function *materializeCaseConstructorReturnFrame(
         rawmem, builder.getInt64Ty()->getPointerTo(), "tagptr");
     // Since we only care about the tag, we can convert to i64 and forget
     // about the rest.
-    Value *Tag = builder.CreateLoad(TagPtr, "tag");
+    LoadInst *Tag = builder.CreateLoad(TagPtr, "tag");
+    Tag->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
 
     BasicBlock *failure = BasicBlock::Create(m.getContext(), "failure", f);
     builder.SetInsertPoint(failure);
@@ -1275,8 +1317,9 @@ Function *materializePrimitiveCaseReturnFrame(
     // materializeDynamicLetBinding Open a new scope.
     BuildCtx::Scoper s(bctx);
     if (freeVarsInAlts.size() > 0) {
-        Value *closureAddr =
+        LoadInst *closureAddr =
             builder.CreateLoad(bctx.enteringClosureAddr, "closure_addr_int");
+        closureAddr->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
         Value *closure = builder.CreateIntToPtr(
             closureAddr, bctx.ClosureTy[freeVarsInAlts.size()]->getPointerTo(),
             "closure_typed");
@@ -1544,8 +1587,7 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
                                                          builder, bctx);
         }
     }();
-
-    // NamedMDNode *alias_metadata = getNamedMetadata();
+    continuation->addFnAttr(llvm::Attribute::AlwaysInline);
 
     CallInst *clsRaw =
         builder.CreateCall(bctx.malloc,
@@ -1555,13 +1597,17 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
     clsRaw->addAttribute(AttributeList::ReturnIndex, llvm::Attribute::NoAlias);
     assert(clsRaw->returnDoesNotAlias());
 
-
     Value *clsTyped = builder.CreateBitCast(
         clsRaw, bctx.ClosureTy[freeVarsInAlts.size()]->getPointerTo(),
         "closure_typed");
     Value *fnSlot = builder.CreateGEP(
         clsTyped, {builder.getInt64(0), builder.getInt32(0)}, "fn_slot");
-    builder.CreateStore(continuation, fnSlot);
+    StoreInst *SI = builder.CreateStore(continuation, fnSlot);
+
+    //MDBuilder mdbuilder(m.getContext());
+    //MDNode *invariantGroup = mdbuilder.createAnonymousAliasScopeDomain("closure_invariant_group");
+    SI->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
+
 
     // store free vars into the slot.
     int i = 0;
@@ -1572,7 +1618,9 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
             freeVar + "_free_in_case_slot");
         Value *freeVarVal = bctx.getIdentifier(freeVar).v;
         freeVarVal = TransmuteToInt(freeVarVal, builder);
-        builder.CreateStore(freeVarVal, freeVarSlot);
+        StoreInst *SI = builder.CreateStore(freeVarVal, freeVarSlot);
+        SI->setAAMetadata(bctx.aliasctx.getCaseClosureScopeAAMD());
+        SI->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
         i++;
     }
 
@@ -1644,7 +1692,9 @@ void loadFreeVariableFromClosure(Value *closure, Identifier name,
         {builder.getInt64(0), builder.getInt32(1), builder.getInt32(idx)},
         "free__" + name + "__ty_" + ty->getTypeName());
 
-    v = builder.CreateLoad(v, name);
+    LoadInst *LI = builder.CreateLoad(v, name);
+    LI->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
+    v = LI;
     if (ty != bctx.getPrimIntTy()) {
         v = builder.CreateIntToPtr(v, getRawMemTy(builder), name + "_rawmem");
     }
@@ -1669,8 +1719,10 @@ Function *_materializeDynamicLetBinding(const Binding *b, Module &m,
     BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
     builder.SetInsertPoint(entry);
 
-    Value *closureAddr =
+    LoadInst *closureAddr =
         builder.CreateLoad(bctx.enteringClosureAddr, "closure_addr_int");
+    closureAddr->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
+
     Value *closure = builder.CreateIntToPtr(
         closureAddr,
         bctx.ClosureTy[b->getRhs()->free_params_size()]->getPointerTo(),
@@ -1730,7 +1782,11 @@ void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
         Value *fnSlot =
             builder.CreateGEP(cls, {builder.getInt64(0), builder.getInt32(0)},
                               b->getName() + "_fn_slot");
-        builder.CreateStore(f, fnSlot);
+        StoreInst *SI = builder.CreateStore(f, fnSlot);
+        SI->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
+
+
+
 
         int i = 0;
         for (Parameter *p : b->getRhs()->free_params_range()) {
@@ -1740,7 +1796,8 @@ void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
                 b->getName() + "_free_param_" + p->getName() + "_slot");
             Value *v = bctx.getIdentifier(p->getName()).v;
             v = TransmuteToInt(v, builder);
-            builder.CreateStore(v, freeParamSlot);
+            StoreInst *SI = builder.CreateStore(v, freeParamSlot);
+            SI->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
             i++;
         }
     }
@@ -1952,6 +2009,8 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         if (optimisationLevel > 0) {
             MPM = PB.buildModuleOptimizationPipeline(optimisationLevel);;
             FPM = PB.buildFunctionSimplificationPipeline(optimisationLevel, PassBuilder::ThinLTOPhase::None);
+            FPM.addPass(StackMatcherPass("Return"));
+            FPM.addPass(StackMatcherPass("Int"));
         }
 
         LoopAnalysisManager LAM;
@@ -1966,15 +2025,13 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
 
 
-        FPM.addPass(StackMatcherPass("Return"));
-        FPM.addPass(StackMatcherPass("Int"));
 
         // Fix the IR first, then run optimisations.
         MPM.addPass(AlwaysInlinerPass());
         MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
         MPM.addPass(createModuleToPostOrderCGSCCPassAdaptor(std::move(CGSCCPM)));
 
-        for(int i = 0; i < 1; i++) {
+        for(int i = 0; i < 5; i++) {
             MPM.run(*m, MAM);
         }
     }
