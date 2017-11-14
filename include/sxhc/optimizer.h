@@ -43,7 +43,7 @@ public:
         if (F.isDeclaration()) return llvm::PreservedAnalyses::all();
         DominatorTree &DT = FAM.getResult<DominatorTreeAnalysis>(F);
         assert(!F.isDeclaration() && "expected F to be a definition.");
-        visitBB(F.getEntryBlock(), std::stack<CallInst *>(), DT);
+        visitBB(F.getEntryBlock(), std::stack<CallInst *>(), DT, std::set<BasicBlock *>());
 
         return llvm::PreservedAnalyses::none();
     }
@@ -53,7 +53,8 @@ private:
 
     using PushPopPair = std::pair<CallInst *, CallInst *>;
 
-    void visitBB(BasicBlock &BB, std::stack<CallInst *> pushStack, const DominatorTree &DT) {
+    void visitBB(BasicBlock &BB, std::stack<CallInst *> pushStack, const DominatorTree &DT, std::set<BasicBlock *> Visited) {
+        Visited.insert(&BB);
         std::vector<PushPopPair> replacements;
 
         for(Instruction &I : BB) {
@@ -68,7 +69,7 @@ private:
             const std::string calleeName = CI->getCalledFunction()->getName();
             if (calleeName == "push" + stackname) {
                 pushStack.push(CI);
-                dbgs() << "pushing: " << *CI << "\n";
+                // dbgs() << "pushing: " << *CI << "\n";
 
             }
             else if (calleeName == "pop" + stackname) {
@@ -77,7 +78,7 @@ private:
                 CallInst *Push = pushStack.top();
                 pushStack.pop();
 
-                dbgs() << "popping: " << *CI << " | replacing with: " << *Push << "\n";
+                // dbgs() << "popping: " << *CI << " | replacing with: " << *Push << "\n";
                 replacements.push_back(std::make_pair(Push, CI));
 
             }
@@ -108,12 +109,14 @@ private:
         //     B  D  C
         //
         // Just because A dom D, does not mean that D will use A's stack state.
-        // const TerminatorInst *TI = BB.getTerminator();
-        // for(int i = 0; i < TI->getNumSuccessors(); i++) {
-        //     BasicBlock *Next = TI->getSuccessor(i);
-        //     if (DT.dominates(&BB, Next))
-        //          visitBB(*Next, matchedStack, DT);
-        // }
+        const TerminatorInst *TI = BB.getTerminator();
+        for(int i = 0; i < TI->getNumSuccessors(); i++) {
+            BasicBlock *Next = TI->getSuccessor(i);
+            if (Visited.count(Next)) continue;
+
+            if (DT.dominates(&BB, Next))
+                 visitBB(*Next, pushStack, DT, Visited);
+        }
 
     }
 

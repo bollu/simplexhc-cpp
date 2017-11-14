@@ -866,6 +866,7 @@ class BuildCtx {
                               FunctionType::get(builder.getVoidTy(), {},
                                                 /*varargs = */ false),
                               name);
+        F->addFnAttr(llvm::Attribute::AlwaysInline);
         BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
         builder.SetInsertPoint(entry);
         Value *i = bctx.createPopInt(builder, "i");
@@ -2037,20 +2038,26 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         MPM.addPass(createModuleToPostOrderCGSCCPassAdaptor(std::move(CGSCCPM)));
 
         // We need to run the pipeline once for correctness. Anything after that is optimisation.
+        dbgs() << __PRETTY_FUNCTION__ << ":" << __LINE__ << "\n";
         MPM.run(*m, MAM);
+        dbgs() << __PRETTY_FUNCTION__ << ":" << __LINE__ << "\n";
 
         if (optimisationLevel > 0) {
-            for (int i = 0; i < 5; i++) {
+            dbgs() << __PRETTY_FUNCTION__ << ":" << __LINE__ << "\n";
+            for (int i = 0; i < 1; i++) {
                 MPM.run(*m, MAM);
             }
 
+            dbgs() << __PRETTY_FUNCTION__ << ":" << __LINE__ << "\n";
             for (Function &F : *m) {
                 F.removeFnAttr(llvm::Attribute::NoInline);
             }
+            dbgs() << __PRETTY_FUNCTION__ << ":" << __LINE__ << "\n";
 
-            for (int i = 0; i < 5; i++) {
+            for (int i = 0; i < 1; i++) {
                 MPM.run(*m, MAM);
             }
+            dbgs() << __PRETTY_FUNCTION__ << ":" << __LINE__ << "\n";
         }
     }
 
