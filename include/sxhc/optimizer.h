@@ -41,31 +41,10 @@ public:
     PreservedAnalyses run(Function &F, FunctionAnalysisManager &FAM) {
 
         if (F.isDeclaration()) return llvm::PreservedAnalyses::all();
-
-        static int count = 1;
-        // On O3, ackerman-worker-wrapper-optimised.
-        // 100 fails
-        // 50 fails
-        // 40 fails
-        // 35 fails.
-        // 30 fails
-        // 29 succeeds.
-        // 27 succeeds.
-        // 25 succeeds
-        // 22 succeeds.
-        // 10 succeeds
-        if (count >= 30) return llvm::PreservedAnalyses::all();
-
-        if (count == 29) errs() << "\nFucked up function (before):\n" << F << "\n";
-
         DominatorTree &DT = FAM.getResult<DominatorTreeAnalysis>(F);
-        errs() << "\nStackMatcherPass running on: |" << F.getName() << "|\n";
-
         assert(!F.isDeclaration() && "expected F to be a definition.");
         visitBB(F.getEntryBlock(), std::stack<CallInst *>(), DT);
 
-        if (count == 29) errs() << "\nFucked up function (after):\n" << F << "\n";
-        count++;
         return llvm::PreservedAnalyses::none();
     }
 
@@ -89,7 +68,7 @@ private:
             const std::string calleeName = CI->getCalledFunction()->getName();
             if (calleeName == "push" + stackname) {
                 pushStack.push(CI);
-                errs() << "pushing: " << *CI << "\n";
+                dbgs() << "pushing: " << *CI << "\n";
 
             }
             else if (calleeName == "pop" + stackname) {
@@ -98,7 +77,7 @@ private:
                 CallInst *Push = pushStack.top();
                 pushStack.pop();
 
-                errs() << "popping: " << *CI << " | replacing with: " << *Push << "\n";
+                dbgs() << "popping: " << *CI << " | replacing with: " << *Push << "\n";
                 replacements.push_back(std::make_pair(Push, CI));
 
             }
