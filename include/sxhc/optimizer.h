@@ -39,23 +39,43 @@ public:
     static StringRef name() { return "stackMatcher"; }
 
     PreservedAnalyses run(Function &F, FunctionAnalysisManager &FAM) {
+
         if (F.isDeclaration()) return llvm::PreservedAnalyses::all();
+
+        static int count = 1;
+        // On O3, ackerman-worker-wrapper-optimised.
+        // 100 fails
+        // 50 fails
+        // 40 fails
+        // 35 fails.
+        // 30 fails
+        // 29 succeeds.
+        // 27 succeeds.
+        // 25 succeeds
+        // 22 succeeds.
+        // 10 succeeds
+        if (count >= 30) return llvm::PreservedAnalyses::all();
+
+        if (count == 29) errs() << "\nFucked up function (before):\n" << F << "\n";
 
         DominatorTree &DT = FAM.getResult<DominatorTreeAnalysis>(F);
         errs() << "\nStackMatcherPass running on: |" << F.getName() << "|\n";
 
         assert(!F.isDeclaration() && "expected F to be a definition.");
-        visitBB(F.getEntryBlock(), std::stack<Value *>(), DT);
+        visitBB(F.getEntryBlock(), std::stack<CallInst *>(), DT);
+
+        if (count == 29) errs() << "\nFucked up function (after):\n" << F << "\n";
+        count++;
         return llvm::PreservedAnalyses::none();
     }
 
 private:
     std::string stackname;
 
-    using InstReplacement = std::pair<Instruction *, Value *>;
+    using PushPopPair = std::pair<CallInst *, CallInst *>;
 
-    void visitBB(BasicBlock &BB, std::stack<Value *> matchedStack, const DominatorTree &DT) {
-        std::vector<InstReplacement> replacements;
+    void visitBB(BasicBlock &BB, std::stack<CallInst *> pushStack, const DominatorTree &DT) {
+        std::vector<PushPopPair> replacements;
 
         for(Instruction &I : BB) {
             // We make _heavy_ assumptions about our IR: that is, that any instruction we don't understand can't hurt us
@@ -68,33 +88,54 @@ private:
 
             const std::string calleeName = CI->getCalledFunction()->getName();
             if (calleeName == "push" + stackname) {
-                matchedStack.push(CI->getArgOperand(0));
+                pushStack.push(CI);
                 errs() << "pushing: " << *CI << "\n";
 
             }
             else if (calleeName == "pop" + stackname) {
                 // We do not have a matching push, our function is incomplete. continue
-                if (matchedStack.size() == 0) continue;
-                Value *V = matchedStack.top();
-                matchedStack.pop();
+                if (pushStack.size() == 0) continue;
+                CallInst *Push = pushStack.top();
+                pushStack.pop();
 
-                errs() << "popping: " << *CI << " | replacing with: " << *V << "\n";
-                replacements.push_back(std::make_pair(CI, V));
-
-                //errs() << __LINE__ << "\n";
-                //ReplaceInstWithValue(CI->getParent()->getInstList(), ii, V);
-                //errs() << __LINE__ << "\n";
+                errs() << "popping: " << *CI << " | replacing with: " << *Push << "\n";
+                replacements.push_back(std::make_pair(Push, CI));
 
             }
         }
 
-        for (InstReplacement r : replacements) {
-            Instruction *Old = r.first;
-            Value *New = r.second;
-            BasicBlock::iterator ii(Old);
-            ReplaceInstWithValue(Old->getParent()->getInstList(), ii, New);
+        for (PushPopPair r : replacements) {
+            CallInst *Push = r.first;
+            CallInst *Pop = r.second;
+            Value *PushedVal = Push->getArgOperand(0);
+            BasicBlock::iterator ii(Pop);
+            ReplaceInstWithValue(Pop->getParent()->getInstList(), ii, PushedVal);
+            Push->eraseFromParent();
+
 
         }
+
+        // If you are next in the CFG and are dominated in the DT, then you _will_ have the stack state your
+        // parent has. We need both to be satisfied. (Why?)
+        // Consider a CFG:
+        //     A
+        //   /   \
+        //  B    C
+        //  \   /
+        //    D
+        // Corresponding DT:
+        //        A
+        //      / | \
+        //     B  D  C
+        //
+        // Just because A dom D, does not mean that D will use A's stack state.
+        // const TerminatorInst *TI = BB.getTerminator();
+        // for(int i = 0; i < TI->getNumSuccessors(); i++) {
+        //     BasicBlock *Next = TI->getSuccessor(i);
+        //     if (DT.dominates(&BB, Next))
+        //          visitBB(*Next, matchedStack, DT);
+        // }
+
     }
 
 };
