@@ -78,8 +78,13 @@ Perhaps it is just me, but I find that code very unclear to read. I do not
 know how to convey intent with Haskell. I would love for pointers to other
 haskell compilers that are cleanly designed, so I can learn.
 
+# Current optimisations planned
+- Mark `@alloc` as pure so that the optimiser can safely remove them.
+- Understand what screws up when I allow my stack simulator pass to run on BBs with unique predecessors.
+
 # References
  - [Implementing functional languages on stock hardware: the spineless, tagless, G machine](https://www.dcc.fc.up.pt/~pbv/aulas/linguagens/peytonjones92implementing.pdf)
  - [Making a fast curry, Push/Enter versus Eval/Apply](http://www.cs.tufts.edu/~nr/cs257/archive/simon-peyton-jones/eval-apply-jfp.pdf)
  - [GRIN - Whole program optimisation for lazy functional languages](http://web.archive.org/web/20080506021638/http://www.cs.chalmers.se:80/~boquist/phd/index.html)
  - [FLRC: intel haskell research compiler](https://github.com/IntelLabs/flrc)
+

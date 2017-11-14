@@ -2044,7 +2044,7 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
 
         if (optimisationLevel > 0) {
             dbgs() << __PRETTY_FUNCTION__ << ":" << __LINE__ << "\n";
-            for (int i = 0; i < 1; i++) {
+            for (int i = 0; i < 30; i++) {
                 MPM.run(*m, MAM);
             }
 
@@ -2054,7 +2054,7 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
             }
             dbgs() << __PRETTY_FUNCTION__ << ":" << __LINE__ << "\n";
 
-            for (int i = 0; i < 1; i++) {
+            for (int i = 0; i < 30; i++) {
                 MPM.run(*m, MAM);
             }
             dbgs() << __PRETTY_FUNCTION__ << ":" << __LINE__ << "\n";
