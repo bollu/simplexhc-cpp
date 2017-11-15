@@ -113,7 +113,7 @@ private:
         for(int i = 0; i < TI->getNumSuccessors(); i++) {
             BasicBlock *Next = TI->getSuccessor(i);
             if (Visited.count(Next)) continue;
-            assert(false && "fixme, understand why this screws up.");
+            //assert(false && "fixme, understand why this screws up.");
 
             // bringing this back in creates errors.
             //if (DT.dominates(&BB, Next))
