@@ -334,10 +334,8 @@ class BuildCtx {
     // TODO: do this when you have more free time :)
     // using ClosureTagMap = std::map<ClosureTag, AssertingVH<GlobalVariable>>;
 
-    AssertingVH<Function> pushBoxed, popBoxed;
     LLVMClosureData *printInt;
     LLVMClosureData *primMultiply;
-    AssertingVH<Function> malloc;
     AssertingVH<GlobalVariable> stackInt;
     AssertingVH<GlobalVariable> stackIntTop;
 
@@ -513,8 +511,24 @@ class BuildCtx {
         return CI;
     }
 
+
+    void createPushBoxed(StgIRBuilder &builder, Value *Boxed) const {
+        Value *BoxedVoidPtr = builder.CreateBitCast(Boxed, builder.getInt8Ty()->getPointerTo(), Boxed->getName() + ".voidptr");
+        CallInst *CI = builder.CreateCall(this->pushBoxed, {BoxedVoidPtr});
+        //CI->setCallingConv(CallingConv::Fast);
+
+    };
+
+
+    Value *createPopBoxedVoidPtr(StgIRBuilder &builder, std::string name) const {
+        CallInst *CI = builder.CreateCall(this->popBoxed, {}, name + ".voidptr");
+        return CI;
+        //return CI;
+    }
+
     Value *createPushReturn(StgIRBuilder &builder, Value *Cont) const {
-        CallInst *CI = builder.CreateCall(this->pushReturnCont, {Cont});
+        Value *voidptr = builder.CreateBitCast(Cont, builder.getInt8Ty()->getPointerTo(), Cont->getName() + ".voidptr");
+        CallInst *CI = builder.CreateCall(this->pushReturnCont, {voidptr});
         return CI;
 
     }
@@ -637,6 +651,25 @@ class BuildCtx {
         return invariantGroupNode;
     }
 
+    Value *createCallAllocate(StgIRBuilder &builder, uint64_t bytes, std::string name, Type *resultPointerTy) {
+        CallInst *rawmem =
+                builder.CreateCall(this->malloc,
+                                   {builder.getInt64(bytes)},
+                                   name + ".raw");
+        rawmem->addAttribute(AttributeList::ReturnIndex,
+                             llvm::Attribute::NoAlias);
+        assert(rawmem->returnDoesNotAlias());
+
+        if (resultPointerTy) {
+            Value *typed = builder.CreateBitCast(
+                    rawmem, resultPointerTy, name + ".typed");
+
+            return typed;
+        } else {
+            return rawmem;
+        }
+    }
+
     // Class to create and destroy a scope with RAII.
     class Scoper {
        public:
@@ -650,7 +683,9 @@ class BuildCtx {
 
    private:
     AssertingVH<Function> pushInt, popInt;
+    AssertingVH<Function> pushBoxed, popBoxed;
     AssertingVH<Function> pushReturnCont, popReturnCont;
+    AssertingVH<Function> malloc;
     friend class Scoper;
 
     // push a scope for identifier resolution
@@ -950,6 +985,9 @@ class BuildCtx {
                     "alloc");
 
             alloc->addFnAttr(Attribute::NoInline);
+            // this is fucked, but in a cool way: GC makes memory allocation pure :)
+            // alloc->addFnAttr(Attribute::ReadNone);
+            // Why does readnone fuck it up?
 
             BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", alloc);
             builder.SetInsertPoint(entry);
@@ -1043,8 +1081,9 @@ void materializeAp(const ExpressionAp *ap, Module &m, StgIRBuilder &builder,
             if (vdata.stgtype == bctx.getPrimIntTy()) {
                 bctx.createPushInt(builder, v);
             } else {
-                v = builder.CreateBitCast(v, getRawMemTy(builder));
-                builder.CreateCall(bctx.pushBoxed, {v});
+                bctx.createPushBoxed(builder, v);
+                // v = builder.CreateBitCast(v, getRawMemTy(builder));
+                //builder.CreateCall(bctx.pushBoxed, {v});
             }
         }
     }
@@ -1067,10 +1106,11 @@ void materializeConstructor(const ExpressionConstructor *c, Module &m,
     const int TotalSize =
         m.getDataLayout().getTypeAllocSize(structType);  // for the tag.
 
-    Value *rawMem = builder.CreateCall(bctx.malloc,
-                                       {builder.getInt64(TotalSize)}, "rawmem");
-    Value *typedMem =
-        builder.CreateBitCast(rawMem, structType->getPointerTo(), "typedmem");
+    //Value *rawMem = builder.CreateCall(bctx.malloc,
+    //                                   {builder.getInt64(TotalSize)}, "rawmem");
+    //Value *typedMem =
+    //    builder.CreateBitCast(rawMem, structType->getPointerTo(), "typedmem");
+    Value *typedMem = bctx.createCallAllocate(builder, TotalSize, "constructor", structType->getPointerTo());
 
     const int Tag = cons->getParent()->getIndexForConstructor(cons);
     Value *tagIndex = builder.CreateGEP(
@@ -1093,7 +1133,9 @@ void materializeConstructor(const ExpressionConstructor *c, Module &m,
          SI->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
         i++;
     }
-    builder.CreateCall(bctx.pushBoxed, {rawMem});
+
+    bctx.createPushBoxed(builder, {typedMem});
+    // builder.CreateCall(bctx.pushBoxed, {typedMem});
 
     // now pop a continuation off the return stack and invoke it
     Value *ReturnCont = bctx.createPopReturn(builder, "returncont");
@@ -1146,7 +1188,7 @@ void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
             LoadInst *LI = builder.CreateLoad(
                 Slot, "cons_mem_as_int_" + std::to_string(i));
              LI->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
-            Value *V = builder.CreateIntToPtr(V, getRawMemTy(builder),
+            Value *V = builder.CreateIntToPtr(LI, getRawMemTy(builder),
                                        "cons_rawmem_" + std::to_string(i));
             const StgType *Ty = bctx.getTypeFromName(cons->getTypeName(i));
             errs() << "*" << __FUNCTION__ << ":" << __LINE__ <<  "\n";
@@ -1233,7 +1275,7 @@ Function *materializeCaseConstructorReturnFrame(
         return f;
     }
 
-    Value *rawmem = builder.CreateCall(bctx.popBoxed, {}, "rawmem");
+    Value *rawmem = bctx.createPopBoxedVoidPtr(builder, "rawmem"); // builder.CreateCall(bctx.popBoxed, {}, "rawmem");
 
     Value *TagPtr = builder.CreateBitCast(
         rawmem, builder.getInt64Ty()->getPointerTo(), "tagptr");
@@ -1595,17 +1637,20 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
     }();
     continuation->addFnAttr(llvm::Attribute::AlwaysInline);
 
-    CallInst *clsRaw =
-        builder.CreateCall(bctx.malloc,
-                           {builder.getInt64(m.getDataLayout().getTypeAllocSize(
-                               bctx.ClosureTy[freeVarsInAlts.size()]))},
-                           "closure_raw");
-    clsRaw->addAttribute(AttributeList::ReturnIndex, llvm::Attribute::NoAlias);
-    assert(clsRaw->returnDoesNotAlias());
+    Type *closureTy = bctx.ClosureTy[freeVarsInAlts.size()];
+    Value *clsTyped = bctx.createCallAllocate(builder, m.getDataLayout().getTypeAllocSize(closureTy), "closure", closureTy->getPointerTo());
 
-    Value *clsTyped = builder.CreateBitCast(
-        clsRaw, bctx.ClosureTy[freeVarsInAlts.size()]->getPointerTo(),
-        "closure_typed");
+    //CallInst *clsRaw =
+    //    builder.CreateCall(bctx.malloc,
+    //                       {builder.getInt64(m.getDataLayout().getTypeAllocSize(
+    //                           bctx.ClosureTy[freeVarsInAlts.size()]))},
+    //                       "closure_raw");
+    //clsRaw->addAttribute(AttributeList::ReturnIndex, llvm::Attribute::NoAlias);
+    //assert(clsRaw->returnDoesNotAlias());
+
+    //Value *clsTyped = builder.CreateBitCast(
+    //    clsRaw, bctx.ClosureTy[freeVarsInAlts.size()]->getPointerTo(),
+    //    "closure_typed");
     Value *fnSlot = builder.CreateGEP(
         clsTyped, {builder.getInt64(0), builder.getInt32(0)}, "fn_slot");
     StoreInst *SI = builder.CreateStore(continuation, fnSlot);
@@ -1630,7 +1675,7 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
         i++;
     }
 
-    bctx.createPushReturn(builder, clsRaw);
+    bctx.createPushReturn(builder, clsTyped);
     materializeExpr(scrutinee, m, builder, bctx);
 
     // clean this up, I should need this epilogue for materializeExpr in the
@@ -1676,12 +1721,8 @@ Value *_allocateLetBindingDynamicClosure(const Binding *b, BasicBlock *BB,
     builder.SetInsertPoint(BB);
 
     const uint64_t sizeInBytes = m.getDataLayout().getTypeAllocSize(closureTy);
-    Value *rawMem = builder.CreateCall(
-        bctx.malloc, {builder.getInt64(sizeInBytes)}, "rawmem");
-    Value *typedMem = builder.CreateBitCast(rawMem, closureTy->getPointerTo(),
-                                            "closure_" + b->getName());
     // no store to function slot, args. These come later.
-    return typedMem;
+    return bctx.createCallAllocate(builder, sizeInBytes, "let.dynamic.closure", closureTy->getPointerTo());
 }
 
 // Load free parameters from the closure `closure`, with free parameters
@@ -1863,9 +1904,10 @@ void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
             bctx.insertIdentifier(p->getName(),
                                   LLVMValueData(pv, bctx.getPrimIntTy()));
         } else {
-            Value *pv =
-                builder.CreateCall(bctx.popBoxed, {}, "param_" + p->getName());
-            errs() << "*" << __FUNCTION__ << ":" << __LINE__ <<  "\n";
+            //Value *pv =
+            //    builder.CreateCall(bctx.popBoxed, {}, "param_" + p->getName());
+            Value *pv = 
+                bctx.createPopBoxedVoidPtr(builder, "param_" + p->getName());
             bctx.insertIdentifier(p->getName(), LLVMValueData(pv, Ty));
         }
     }
