@@ -47,33 +47,9 @@ public:
 
     PreservedAnalyses run(Function &F, FunctionAnalysisManager &FAM) {
 
-        static int count = 1;
-        // 95: fails
-        // 85: fails
-        // 70: fails
-        // 60: fails
-        // 55: fails
-        // 53: fails
-        // 52: fails
-        // 51: works
-        // 50: works
-        // 40: works
-        // 38: works
-        // 35: works
-        // 30: works
-        // 20: works
-        // 0: works
-        static const int BREAK_COUNT = 100;
 
         if (F.isDeclaration()) { return llvm::PreservedAnalyses::all(); }
 
-        if (count >= BREAK_COUNT) {
-            return llvm::PreservedAnalyses::all();
-        }
-
-        if (count == BREAK_COUNT - 1) {
-            errs() << "F before optimisation:\n" << F << "\n---\n";
-        }
         DominatorTree &DT = FAM.getResult<DominatorTreeAnalysis>(F);
         assert(!F.isDeclaration() && "expected F to be a definition.");
         std::set<PushPopPair> replacements =  visitBB(F.getEntryBlock(), std::stack<CallInst *>(), DT, std::set<BasicBlock *>());
@@ -96,10 +72,6 @@ public:
 
         }
 
-        if (count == BREAK_COUNT - 1) {
-            errs() << "F after optimisation:\n" << F << "\n---\n";
-        }
-        count++;
         return llvm::PreservedAnalyses::none();
     }
 
