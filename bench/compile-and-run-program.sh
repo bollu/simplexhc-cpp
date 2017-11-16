@@ -13,9 +13,9 @@ OUTO=$1".out.o"
 OUTLL=$1".out.ll"
 
 $SIMPLEXHC  $1 --emit-llvm -o $OUTLL ${@:2}  -O 3
-$OPT  $OUTLL -S -o temp; mv temp $OUTLL
+$OPT -O3  $OUTLL -S -o temp; mv temp $OUTLL
 
-$LLC $OUTLL -o $OUTO -filetype=obj  --debug-compile -O 3
+$LLC $OUTLL -o $OUTO -filetype=obj -O 3
 
 $CC $OUTO -L $LIBSTGPATH -lstgruntime -o $1.out
 rm $OUTO

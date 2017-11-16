@@ -20,6 +20,6 @@ binding ackerman = \(aint: PrimInt, bint: PrimInt) -> PrimInt {
 
 
 binding main = \() -> Boxed { 
-    case ackerman (3 8) of
+    case ackerman (3 10) of
         x -> printInt (x); 
 };

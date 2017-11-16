@@ -881,7 +881,9 @@ class BuildCtx {
         // store the address of the closure we are entering
         Value *closureAddr = builder.CreatePtrToInt(
             closureRaw, builder.getInt64Ty(), "closure_addr");
-        builder.CreateStore(closureAddr, bctx.enteringClosureAddr);
+        StoreInst *SI = builder.CreateStore(closureAddr, bctx.enteringClosureAddr);
+        SI->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
+
         // call the function
         CallInst *CI = builder.CreateCall(cont, {});
         CI->setTailCallKind(CallInst::TCK_MustTail);
@@ -985,6 +987,7 @@ class BuildCtx {
                     "alloc");
 
             alloc->addFnAttr(Attribute::NoInline);
+            alloc->addFnAttr(Attribute::InaccessibleMemOnly);
             // this is fucked, but in a cool way: GC makes memory allocation pure :)
             // alloc->addFnAttr(Attribute::ReadNone);
             // Why does readnone fuck it up?
@@ -2096,6 +2099,7 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
             dbgs() << __PRETTY_FUNCTION__ << ":" << __LINE__ << "\n";
             for (Function &F : *m) {
                 if (F.getName() == "alloc") continue;
+                if (F.getName().count("stack")) continue;
                 F.removeFnAttr(llvm::Attribute::NoInline);
             }
             dbgs() << __PRETTY_FUNCTION__ << ":" << __LINE__ << "\n";
