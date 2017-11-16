@@ -30,12 +30,42 @@
 
 
 #define DEBUG_TYPE "stackMatcher"
+using PushPopPair = std::pair<llvm::CallInst *, llvm::CallInst *>;
 
-template<typename T>
-std::set<T> intersect(std::set<T> A, std::set<T> B) {
-    std::set<T> result;
-    std::set_intersection(A.begin(), A.end(), B.begin(), B.end(), std::inserter(result, result.begin()));
+
+// We assume that both A and B have only inter-block push and pop pairs.
+std::set<PushPopPair> getCommonAllowedPushPopPairs(std::set<PushPopPair> A, std::set<PushPopPair> B) {
+    const std::set<llvm::CallInst *> commonPushes = [&] {
+        std::set<llvm::CallInst *> apushes;
+
+        for (PushPopPair pa: A) apushes.insert(pa.first);
+
+        std::set<llvm::CallInst *> commonPushes;
+        for(PushPopPair pb : B) {
+            assert(pb.first != pb.second);
+            if(apushes.count(pb.first)) {
+                commonPushes.insert(pb.first);
+            }
+
+        }
+        return commonPushes;
+    }();
+
+    std::set<PushPopPair> result;
+
+    auto insertCommonPairs = [&] (const std::set<PushPopPair > &pairs, std::set<PushPopPair> &container) {
+        std::set<PushPopPair> ps;
+        for(PushPopPair p : pairs)
+            if (commonPushes.count(p.first)) container.insert(p);
+
+        return ps;
+    };
+
+    insertCommonPairs(A, result);
+    insertCommonPairs(B, result);
+
     return result;
+
 }
 
 using namespace llvm;
@@ -49,11 +79,20 @@ public:
 
 
         if (F.isDeclaration()) { return llvm::PreservedAnalyses::all(); }
+        // if (F.getName() != "main") return llvm::PreservedAnalyses::all();
 
         DominatorTree &DT = FAM.getResult<DominatorTreeAnalysis>(F);
         assert(!F.isDeclaration() && "expected F to be a definition.");
-        std::set<PushPopPair> replacements =  visitBB(F.getEntryBlock(), std::stack<CallInst *>(), DT, std::set<BasicBlock *>());
+        std::set<PushPopPair> inter, intra;
 
+        std::tie(inter, intra) = visitBB(F.getEntryBlock(),
+                                         std::stack<CallInst *>(),
+                                         DT,
+                                         std::set<BasicBlock *>());
+
+        std::set<PushPopPair> replacements;
+        replacements.insert(inter.begin(), inter.end());
+        replacements.insert(intra.begin(), intra.end());
 
 
         for (PushPopPair r : replacements) {
@@ -67,9 +106,13 @@ public:
         // pop- B  C-pop
         //
         // We expect the push to be propogated to both B and C, and then we remove the push.
-        for(PushPopPair r : replacements) {
-            r.first->eraseFromParent();
+        {
+            std::set<CallInst *>pushes;
+            for (PushPopPair r : replacements) {
+                pushes.insert(r.first);
 
+            }
+            for(CallInst *push : pushes) { push->eraseFromParent(); }
         }
 
         return llvm::PreservedAnalyses::none();
@@ -83,13 +126,17 @@ public:
 private:
     std::string stackname;
 
-    using PushPopPair = std::pair<CallInst *, CallInst *>;
+    using InterBlockPushPopPairs = std::set<PushPopPair>;
+    using IntraBlockPushPopPairs = std::set<PushPopPair>;
 
+    // intra = any set of push/pop that is below the current BB
+    // inter = any push/pop that is mix of things below and above the
+    // current BB.
+    std::pair<IntraBlockPushPopPairs, InterBlockPushPopPairs> visitBB(BasicBlock &BB, std::stack<CallInst *> pushStack, const DominatorTree &DT, std::set<BasicBlock *> Visited) {
 
-    // return set of instructions to delete.
-    std::set<PushPopPair> visitBB(BasicBlock &BB, std::stack<CallInst *> pushStack, const DominatorTree &DT, std::set<BasicBlock *> Visited) {
         Visited.insert(&BB);
-        std::set<PushPopPair> replacements;
+        IntraBlockPushPopPairs intraBlockPushPopPairs;
+        InterBlockPushPopPairs interBlockPushPopPairs;
 
         std::set<CallInst *> toDelete;
 
@@ -114,9 +161,13 @@ private:
                 CallInst *Push = pushStack.top();
                 pushStack.pop();
 
-                // dbgs() << "popping: " << *CI << " | replacing with: " << *Push << "\n";
-                replacements.insert(std::make_pair(Push, CI));
-
+                // intra block
+                if(Push->getParent() == CI->getParent()) {
+                    intraBlockPushPopPairs.insert(std::make_pair(Push, CI));
+                }
+                else {
+                    interBlockPushPopPairs.insert(std::make_pair(Push, CI));
+                }
             }
         }
 
@@ -136,27 +187,47 @@ private:
         //
         // Just because A dom D, does not mean that D will use A's stack state.
         const TerminatorInst *TI = BB.getTerminator();
-        bool visitedOneChild = false;
 
-        // The set of push/pops that are safe to remove are those that are common among all children.
-        std::set<PushPopPair> allPps;
+        // list of push/pop pairs of all children.
+        std::vector<InterBlockPushPopPairs> childPpsList;
+
         for(int i = 0; i < TI->getNumSuccessors(); i++) {
             BasicBlock *Next = TI->getSuccessor(i);
-            // if (Visited.count(Next)) continue;
-            //assert(false && "fixme, understand why this screws up.");
-
             if (!DT.dominates(&BB, Next)) continue;
-            std::set<PushPopPair> pps = visitBB(*Next, pushStack, DT, Visited);
-            if (visitedOneChild) {
-                allPps = intersect(pps, allPps);
-            }
-            else {
-                visitedOneChild = true;
-                allPps = pps;
+
+            IntraBlockPushPopPairs curIntra;
+            InterBlockPushPopPairs curInter;
+            std::tie(curIntra, curInter) = visitBB(*Next, pushStack, DT, Visited);
+            // whatever is intra to the child will definitely be intra to the parent.
+            intraBlockPushPopPairs.insert(curIntra.begin(), curIntra.end());
+            childPpsList.push_back(curInter);
+        }
+
+        // count the number of times a push is matched.
+        std::map<CallInst *, unsigned> pushScoreboard;
+        for(InterBlockPushPopPairs pps : childPpsList) {
+            for(PushPopPair pp : pps)
+                pushScoreboard[pp.first]++;
+        }
+
+
+        for(InterBlockPushPopPairs pps : childPpsList) {
+            for(PushPopPair pp : pps) {
+                assert(pushScoreboard.find(pp.first) != pushScoreboard.end());
+                // all children access this push, then add this
+                if (pushScoreboard[pp.first] == TI->getNumSuccessors()) {
+                    if (pp.first->getParent() == &BB) {
+                        intraBlockPushPopPairs.insert(pp);
+                    } else {
+                    interBlockPushPopPairs.insert(pp);
+                    }
+                }
+
             }
         }
 
-        return replacements;
+        return std::make_pair(intraBlockPushPopPairs, InterBlockPushPopPairs()); // interBlockPushPopPairs);
+
 
     }
 
@@ -167,7 +238,6 @@ private:
         BasicBlock::iterator ii(Pop);
         ReplaceInstWithValue(Pop->getParent()->getInstList(), ii, PushedVal);
     }
-
 
 };
 
