@@ -360,8 +360,8 @@ class BuildCtx {
 
     BuildCtx(Module &m, StgIRBuilder &builder, bool nodebug) : aliasctx(m),  nodebug(nodebug){
 
-        errs() << "HACK: setting nodebug to false.\n";
-        nodebug = false;
+        //errs() << "HACK: setting nodebug to false.\n";
+        //nodebug = false;
 
         llvmNoDebug = new GlobalVariable(m, builder.getInt1Ty(), /*isConstant=*/ true, GlobalValue::ExternalLinkage, builder.getInt1(nodebug), "nodebug");
 
@@ -1011,6 +1011,9 @@ class BuildCtx {
             builder.CreateStore(newTop, heapMemoryTop);
 
             Value *outOfMemory = builder.CreateICmpUGT(newTop, builder.getInt64(HEAP_SIZE_SAFETY), "outOfMemory");
+            Value *nodebug = builder.CreateLoad(bctx.llvmNoDebug, "nodebug");
+            Value *isdebug = builder.CreateNot(nodebug, "isdebug");
+            outOfMemory = builder.CreateAnd(outOfMemory, isdebug, "outOfMemoryGuard");
 
             BasicBlock *retBB = BasicBlock::Create(m.getContext(), "ret", alloc);
             builder.SetInsertPoint(retBB);
@@ -2092,6 +2095,7 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
 
             dbgs() << __PRETTY_FUNCTION__ << ":" << __LINE__ << "\n";
             for (Function &F : *m) {
+                if (F.getName() == "alloc") continue;
                 F.removeFnAttr(llvm::Attribute::NoInline);
             }
             dbgs() << __PRETTY_FUNCTION__ << ":" << __LINE__ << "\n";
