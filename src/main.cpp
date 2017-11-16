@@ -71,7 +71,7 @@ class StgDataType : public StgType {
 
    public:
     explicit StgDataType(const DataType *datatype)
-        : datatype(datatype), StgType(StgType::STK_Data){};
+        : StgType(StgType::STK_Data), datatype(datatype) {};
     const DataType *getDataType() const { return datatype; };
 
     std::string getTypeName() const { return datatype->getTypeName(); }
@@ -358,7 +358,7 @@ class BuildCtx {
     GlobalVariable *llvmNoDebug;
     bool nodebug;
 
-    BuildCtx(Module &m, StgIRBuilder &builder, bool nodebug) : nodebug(nodebug), aliasctx(m) {
+    BuildCtx(Module &m, StgIRBuilder &builder, bool nodebug) : aliasctx(m),  nodebug(nodebug){
 
         errs() << "HACK: setting nodebug to false.\n";
         nodebug = false;
@@ -514,7 +514,7 @@ class BuildCtx {
 
     void createPushBoxed(StgIRBuilder &builder, Value *Boxed) const {
         Value *BoxedVoidPtr = builder.CreateBitCast(Boxed, builder.getInt8Ty()->getPointerTo(), Boxed->getName() + ".voidptr");
-        CallInst *CI = builder.CreateCall(this->pushBoxed, {BoxedVoidPtr});
+        builder.CreateCall(this->pushBoxed, {BoxedVoidPtr});
         //CI->setCallingConv(CallingConv::Fast);
 
     };
@@ -995,7 +995,7 @@ class BuildCtx {
             Value *prevTop = builder.CreateLoad(heapMemoryTop, "prevTopSlot");
             Value *memBottom = builder.CreateLoad(rawHeapMemory, "memBottom");
             errs() << "memBottom: " << *memBottom << "\n";
-            Value *mem = builder.CreateGEP(memBottom, {prevTop}, "memIndexed");
+            Value *mem = builder.CreateGEP(memBottom, prevTop, "memIndexed");
             errs() << "mem: " << *mem << "\n";
 
             Argument *memSize = alloc->arg_begin();
@@ -1006,7 +1006,7 @@ class BuildCtx {
             static const int ALIGNMENT = 4;
             Value *sizeBumped = builder.CreateAdd(memSize, builder.getInt64(ALIGNMENT - 1), "sizeBumped");
             Value *sizeFloor = builder.CreateUDiv(sizeBumped, builder.getInt64(ALIGNMENT), "sizeFloored");
-            Value *sizeAligned = builder.CreateNUWMul(sizeBumped, builder.getInt64(ALIGNMENT), "sizeAligned");
+            Value *sizeAligned = builder.CreateNUWMul(sizeFloor, builder.getInt64(ALIGNMENT), "sizeAligned");
             Value *newTop = builder.CreateAdd(prevTop, sizeAligned, "newTop");
             builder.CreateStore(newTop, heapMemoryTop);
 
@@ -1134,7 +1134,7 @@ void materializeConstructor(const ExpressionConstructor *c, Module &m,
         i++;
     }
 
-    bctx.createPushBoxed(builder, {typedMem});
+    bctx.createPushBoxed(builder, typedMem);
     // builder.CreateCall(bctx.pushBoxed, {typedMem});
 
     // now pop a continuation off the return stack and invoke it
@@ -2185,7 +2185,7 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         errs() << "---------\n";
         errs() << "JIT: executing module:\n";
         SimpleJIT jit;
-        SimpleJIT::ModuleHandle H = jit.addModule(CloneModule(m.get()));
+        jit.addModule(CloneModule(m.get()));
         Expected<JITTargetAddress> memConstructor = jit.findSymbol("init_rawmem_constructor").getAddress();
         if (!memConstructor) {
             errs() << "unable to find `init_rawmem_constructor` in given module:\n";
