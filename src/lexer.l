@@ -1,5 +1,7 @@
 %{
 #pragma clang diagnostic ignored "-Wdeprecated-register"
+#pragma clang diagnostic ignored "-Wunused-function"
+#pragma clang diagnostic ignored "-Wunneeded-internal-declaration"
 #include <math.h>
 #include <iostream>
 #include <string>
