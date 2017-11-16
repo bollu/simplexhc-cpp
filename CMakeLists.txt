@@ -3,7 +3,7 @@ project(sxhc C CXX)
 
 # Colors when compiling with clang
 # set(CMAKE_CXX_FLAGS "-fdiagnostics-color=always -fno-rtti -g -Wall -Werror")
-set(CMAKE_CXX_FLAGS "-fdiagnostics-color=always -fno-rtti -g -Wall")
+set(CMAKE_CXX_FLAGS "-fdiagnostics-color=always -fno-rtti -g -Wall -Werror")
 
 # LLVM
 find_package(LLVM REQUIRED)
@@ -24,7 +24,7 @@ add_flex_bison_dependency(Lexer Parser)
 
 
 # INCLUDES AND SOURCES
-include_directories(include)
+include_directories(include ${LLVM_INCLUDE_DIRS})
 
 add_executable(sxhc
     src/main.cpp
