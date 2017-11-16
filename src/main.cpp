@@ -763,6 +763,7 @@ class BuildCtx {
         assert(stackTop);
         assert(stack);
 
+        F->addFnAttr(llvm::Attribute::InaccessibleMemOnly);
         // If the stack is a stack of pointer things, then we should tag the parameter with a readonly.
         if (stackTop->getType()->getPointerElementType()->isPointerTy())
             F->addParamAttr(0, llvm::Attribute::ReadOnly);
@@ -813,6 +814,7 @@ class BuildCtx {
         assert(F);
         assert(stackTop);
         assert(stack);
+        F->addFnAttr(llvm::Attribute::InaccessibleMemOnly);
 
         BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
         builder.SetInsertPoint(entry);
@@ -2059,6 +2061,7 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         CGSCCPassManager CGSCCPM;
 
         PassBuilder::OptimizationLevel optimisationLevel = static_cast<PassBuilder::OptimizationLevel>((unsigned)PassBuilder::OptimizationLevel::O0 + OPTION_OPTIMISATION_LEVEL);
+        optimisationLevel = PassBuilder::O3;
 
         if (optimisationLevel > 0) {
             MPM = PB.buildModuleOptimizationPipeline(optimisationLevel);;
@@ -2071,6 +2074,9 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         FunctionAnalysisManager FAM;
         CGSCCAnalysisManager CGAM;
         ModuleAnalysisManager MAM;
+
+        // Register the AA manager first so that our version is the one used.
+        FAM.registerPass([&] { return PB.buildDefaultAAPipeline(); });
 
         PB.registerModuleAnalyses(MAM);
         PB.registerCGSCCAnalyses(CGAM);
@@ -2099,7 +2105,8 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
             dbgs() << __PRETTY_FUNCTION__ << ":" << __LINE__ << "\n";
             for (Function &F : *m) {
                 if (F.getName() == "alloc") continue;
-                if (F.getName().count("stack")) continue;
+                if (F.getName().count("push")) continue;
+                if (F.getName().count("pop")) continue;
                 F.removeFnAttr(llvm::Attribute::NoInline);
             }
             dbgs() << __PRETTY_FUNCTION__ << ":" << __LINE__ << "\n";
