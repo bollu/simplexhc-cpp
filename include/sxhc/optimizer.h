@@ -31,6 +31,13 @@
 
 #define DEBUG_TYPE "stackMatcher"
 
+template<typename T>
+std::set<T> intersect(std::set<T> A, std::set<T> B) {
+    std::set<T> result;
+    std::set_intersection(A.begin(), A.end(), B.begin(), B.end(), std::inserter(result, result.begin()));
+    return result;
+}
+
 using namespace llvm;
 // Pass to match abstract stack manipulations and eliminate them.
 class StackMatcherPass : public PassInfoMixin<StackMatcherPass> {
@@ -56,7 +63,7 @@ public:
         // 30: works
         // 20: works
         // 0: works
-        static const int BREAK_COUNT = 52;
+        static const int BREAK_COUNT = 100;
 
         if (F.isDeclaration()) { return llvm::PreservedAnalyses::all(); }
 
@@ -69,7 +76,25 @@ public:
         }
         DominatorTree &DT = FAM.getResult<DominatorTreeAnalysis>(F);
         assert(!F.isDeclaration() && "expected F to be a definition.");
-        visitBB(F.getEntryBlock(), std::stack<CallInst *>(), DT, std::set<BasicBlock *>());
+        std::set<PushPopPair> replacements =  visitBB(F.getEntryBlock(), std::stack<CallInst *>(), DT, std::set<BasicBlock *>());
+
+
+
+        for (PushPopPair r : replacements) {
+            StackMatcherPass::propogatePushToPop(r);
+        }
+
+        // first propogate then delete because multiple pushes can use the same pop.
+        // eg:
+        //       A - push
+        //      / \
+        // pop- B  C-pop
+        //
+        // We expect the push to be propogated to both B and C, and then we remove the push.
+        for(PushPopPair r : replacements) {
+            r.first->eraseFromParent();
+
+        }
 
         if (count == BREAK_COUNT - 1) {
             errs() << "F after optimisation:\n" << F << "\n---\n";
@@ -88,9 +113,13 @@ private:
 
     using PushPopPair = std::pair<CallInst *, CallInst *>;
 
-    void visitBB(BasicBlock &BB, std::stack<CallInst *> pushStack, const DominatorTree &DT, std::set<BasicBlock *> Visited) {
+
+    // return set of instructions to delete.
+    std::set<PushPopPair> visitBB(BasicBlock &BB, std::stack<CallInst *> pushStack, const DominatorTree &DT, std::set<BasicBlock *> Visited) {
         Visited.insert(&BB);
-        std::vector<PushPopPair> replacements;
+        std::set<PushPopPair> replacements;
+
+        std::set<CallInst *> toDelete;
 
         for(Instruction &I : BB) {
             // We make _heavy_ assumptions about our IR: that is, that any instruction we don't understand can't hurt us
@@ -114,21 +143,11 @@ private:
                 pushStack.pop();
 
                 // dbgs() << "popping: " << *CI << " | replacing with: " << *Push << "\n";
-                replacements.push_back(std::make_pair(Push, CI));
+                replacements.insert(std::make_pair(Push, CI));
 
             }
         }
 
-        for (PushPopPair r : replacements) {
-            CallInst *Push = r.first;
-            CallInst *Pop = r.second;
-            Value *PushedVal = Push->getArgOperand(0);
-            BasicBlock::iterator ii(Pop);
-            ReplaceInstWithValue(Pop->getParent()->getInstList(), ii, PushedVal);
-            Push->eraseFromParent();
-
-
-        }
 
         // If you are next in the CFG and are dominated in the DT, then you _will_ have the stack state your
         // parent has. We need both to be satisfied. (Why?)
@@ -145,17 +164,38 @@ private:
         //
         // Just because A dom D, does not mean that D will use A's stack state.
         const TerminatorInst *TI = BB.getTerminator();
+        bool visitedOneChild = false;
+
+        // The set of push/pops that are safe to remove are those that are common among all children.
+        std::set<PushPopPair> allPps;
         for(int i = 0; i < TI->getNumSuccessors(); i++) {
             BasicBlock *Next = TI->getSuccessor(i);
-            if (Visited.count(Next)) continue;
+            // if (Visited.count(Next)) continue;
             //assert(false && "fixme, understand why this screws up.");
 
-            // bringing this back in creates errors.
-            if (DT.dominates(&BB, Next))
-                 visitBB(*Next, pushStack, DT, Visited);
+            if (!DT.dominates(&BB, Next)) continue;
+            std::set<PushPopPair> pps = visitBB(*Next, pushStack, DT, Visited);
+            if (visitedOneChild) {
+                allPps = intersect(pps, allPps);
+            }
+            else {
+                visitedOneChild = true;
+                allPps = pps;
+            }
         }
 
+        return replacements;
+
     }
+
+    static void propogatePushToPop (PushPopPair r) {
+        CallInst *Push = r.first;
+        CallInst *Pop = r.second;
+        Value *PushedVal = Push->getArgOperand(0);
+        BasicBlock::iterator ii(Pop);
+        ReplaceInstWithValue(Pop->getParent()->getInstList(), ii, PushedVal);
+    }
+
 
 };
 
