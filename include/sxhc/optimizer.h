@@ -40,13 +40,48 @@ public:
 
     PreservedAnalyses run(Function &F, FunctionAnalysisManager &FAM) {
 
-        if (F.isDeclaration()) return llvm::PreservedAnalyses::all();
+        static int count = 1;
+        // 95: fails
+        // 85: fails
+        // 70: fails
+        // 60: fails
+        // 55: fails
+        // 53: fails
+        // 52: fails
+        // 51: works
+        // 50: works
+        // 40: works
+        // 38: works
+        // 35: works
+        // 30: works
+        // 20: works
+        // 0: works
+        static const int BREAK_COUNT = 52;
+
+        if (F.isDeclaration()) { return llvm::PreservedAnalyses::all(); }
+
+        if (count >= BREAK_COUNT) {
+            return llvm::PreservedAnalyses::all();
+        }
+
+        if (count == BREAK_COUNT - 1) {
+            errs() << "F before optimisation:\n" << F << "\n---\n";
+        }
         DominatorTree &DT = FAM.getResult<DominatorTreeAnalysis>(F);
         assert(!F.isDeclaration() && "expected F to be a definition.");
         visitBB(F.getEntryBlock(), std::stack<CallInst *>(), DT, std::set<BasicBlock *>());
 
+        if (count == BREAK_COUNT - 1) {
+            errs() << "F after optimisation:\n" << F << "\n---\n";
+        }
+        count++;
         return llvm::PreservedAnalyses::none();
     }
+
+    void getAnalysisUsage(AnalysisUsage &AU) const {
+        AU.addRequired<DominatorTreeWrapperPass>();
+    }
+
 
 private:
     std::string stackname;
@@ -116,8 +151,8 @@ private:
             //assert(false && "fixme, understand why this screws up.");
 
             // bringing this back in creates errors.
-            //if (DT.dominates(&BB, Next))
-            //     visitBB(*Next, pushStack, DT, Visited);
+            if (DT.dominates(&BB, Next))
+                 visitBB(*Next, pushStack, DT, Visited);
         }
 
     }

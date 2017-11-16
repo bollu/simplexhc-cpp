@@ -2058,7 +2058,7 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
             MPM = PB.buildModuleOptimizationPipeline(optimisationLevel);;
             FPM = PB.buildFunctionSimplificationPipeline(optimisationLevel, PassBuilder::ThinLTOPhase::None);
             FPM.addPass(StackMatcherPass("Return"));
-            FPM.addPass(StackMatcherPass("Int"));
+            // FPM.addPass(StackMatcherPass("Int"));
         }
 
         LoopAnalysisManager LAM;
