@@ -241,3 +241,33 @@ private:
 
 };
 
+
+class EliminateUnusedAllocPass : public PassInfoMixin<EliminateUnusedAllocPass> {
+
+    PreservedAnalyses run(Function &F, FunctionAnalysisManager &FAM) {
+        if (F.isDeclaration()) { return llvm::PreservedAnalyses::all(); }
+        AAResults &AA = FAM.getResult<AAManager>(F);
+        runInternal(F, AA);
+
+        return llvm::PreservedAnalyses::none();
+    }
+
+    void runInternal(Function &F, AAResults &AA){
+        errs() << "eliminateunusedalloc running on: " << F.getName() << "\n";
+
+        for(BasicBlock &BB : F) {
+            for(Instruction &I : BB) {
+                errs() << I << "\n";
+
+            }
+
+        }
+
+    }
+
+    void getAnalysisUsage(AnalysisUsage &AU) const {
+        AU.addRequired<DominatorTreeWrapperPass>();
+    }
+
+};
+

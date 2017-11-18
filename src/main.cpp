@@ -2096,7 +2096,6 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
 
 
-
         // Fix the IR first, then run optimisations.
         MPM.addPass(AlwaysInlinerPass());
         MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
@@ -2105,18 +2104,14 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         // We need to run the pipeline once for correctness. Anything after that is optimisation.
         MPM.run(*m, MAM);
 
+        for (Function &F : *m) {
+            if (F.getName() == "alloc") continue;
+            if (F.getName().count("push")) continue;
+            if (F.getName().count("pop")) continue;
+            F.removeFnAttr(llvm::Attribute::NoInline);
+            F.addFnAttr(llvm::Attribute::AlwaysInline);
+        }
         if (optimisationLevel > 0) {
-            for (int i = 0; i < 10; i++) {
-                MPM.run(*m, MAM);
-            }
-
-            for (Function &F : *m) {
-                if (F.getName() == "alloc") continue;
-                if (F.getName().count("push")) continue;
-                if (F.getName().count("pop")) continue;
-                F.removeFnAttr(llvm::Attribute::NoInline);
-                F.addFnAttr(llvm::Attribute::AlwaysInline);
-            }
             for (int i = 0; i < 10; i++) {
                 MPM.run(*m, MAM);
             }
