@@ -1,6 +1,8 @@
+#pragma once
 #include <iostream>
 #include <set>
 #include <sstream>
+#include "sxhc/types.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -241,32 +243,93 @@ private:
 
 };
 
+Instruction *getOwningInst(User *U) {
+    if (isa<Instruction>(U)) return cast<Instruction>(U);
+    if (Constant *C = dyn_cast<Constant>(U)) {
+        assert(C->getNumUses() == 1 && "constant has more than one use");
+        return getOwningInst(*C->users().begin());
+    }
+
+    errs() << "unknown value: " << *U << "\n";
+    report_fatal_error("unreachable code in getOwningInst");
+}
+
+
 
 class EliminateUnusedAllocPass : public PassInfoMixin<EliminateUnusedAllocPass> {
+public:
 
     PreservedAnalyses run(Function &F, FunctionAnalysisManager &FAM) {
         if (F.isDeclaration()) { return llvm::PreservedAnalyses::all(); }
+        // hack.
+        if (true){ return llvm::PreservedAnalyses::all(); }
         AAResults &AA = FAM.getResult<AAManager>(F);
         runInternal(F, AA);
 
         return llvm::PreservedAnalyses::none();
     }
 
+    void getAnalysisUsage(AnalysisUsage &AU) const {
+        AU.addRequired<DominatorTreeWrapperPass>();
+    }
+
+private:
+
+    // This instruction uses a pointer. Return if this instruction `I` allows
+    // the pointer to escape.
+    static bool isUserThatCreatesEscape(Instruction *I, Value *MaybeEscapingVal) {
+        if (auto CI = dyn_cast<CallInst>(I)) {
+            if (!CI->getCalledFunction())  { report_fatal_error ("indirect function call allows pointer to escape."); }
+            if (CI->getName() == "pushReturn") return true;
+            return false;
+        }
+        else if (auto SI = dyn_cast<StoreInst>(I)) {
+            // store  <val> <maybeescapingval> does NOT escape.
+            // store  <maybeescapingval> <escapeloc> DOES escape.
+            return SI->getOperand(0) == MaybeEscapingVal;
+        }
+        else if (auto LI = dyn_cast<LoadInst>(I)) {
+            return false;
+        }
+        else if (isa<BitCastInst>(I) || isa<GetElementPtrInst>(I)) {
+            return doesEscape(I, MaybeEscapingVal);
+        }
+        errs() << "unknown instruction pass to " << __PRETTY_FUNCTION__ << ": " << *I << "\n";
+        report_fatal_error("unknown instruction.");
+    }
+
+    static bool doesEscape(Instruction *I, Value *MaybeEscapingVal) {
+        for(User *U : I->users()) {
+            Instruction *User = getOwningInst(U);
+            if (isUserThatCreatesEscape(User, MaybeEscapingVal)) return true;
+        }
+        return false;
+    }
+
     void runInternal(Function &F, AAResults &AA){
-        errs() << "eliminateunusedalloc running on: " << F.getName() << "\n";
+        errs() << "Eliminate unused alloc running on: " << F.getName() << "\n";
 
         for(BasicBlock &BB : F) {
             for(Instruction &I : BB) {
-                errs() << I << "\n";
+                if(!isa<CallInst>(I)) continue;
+                CallInst &CI = cast<CallInst>(I);
+                // we don't analyse indirect calls.
+                if(!CI.getCalledFunction()) continue;
+
+                assert(CI.getCalledFunction() && "should have bailed out by this point at an indirect function");
+                if (CI.getCalledFunction()->getName() != "alloc") {
+                    errs() << "* CallInst Escapes:" << CI << "\n";
+                    continue;
+                } else {
+                    errs() << "* CallInst DOES NOT Escape, removing:" << CI << "\n";
+                    CI.replaceAllUsesWith(UndefValue::get(CI.getType()));
+                    CI.eraseFromParent();
+                }
 
             }
 
         }
 
-    }
-
-    void getAnalysisUsage(AnalysisUsage &AU) const {
-        AU.addRequired<DominatorTreeWrapperPass>();
     }
 
 };

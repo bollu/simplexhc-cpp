@@ -375,7 +375,8 @@ class BuildCtx {
         populateIntrinsicTypes(m, builder, dataTypeMap, dataConstructorMap,
                                primIntTy, boxedTy);
 
-        malloc = createAllocator(m, builder, *this);
+        realMalloc = createRealMalloc(m, builder, *this);
+        bumpPointerAlloc = createBumpPointerAllocator(m, builder, *this, realMalloc);
         // *** Int ***
         addStack(m, builder, *this, builder.getInt64Ty(), "Int", STACK_SIZE, pushInt,
                  popInt, stackInt, stackIntTop, llvmNoDebug);
@@ -651,9 +652,18 @@ class BuildCtx {
         return invariantGroupNode;
     }
 
+    Function *getRealMalloc() const {
+        return realMalloc;
+    }
+
+    Function *getBumpPointerAllocator() const {
+        return bumpPointerAlloc;
+
+    }
+
     Value *createCallAllocate(StgIRBuilder &builder, uint64_t bytes, std::string name, Type *resultPointerTy) {
         CallInst *rawmem =
-                builder.CreateCall(this->malloc,
+                builder.CreateCall(this->bumpPointerAlloc,
                                    {builder.getInt64(bytes)},
                                    name + ".raw");
         rawmem->addAttribute(AttributeList::ReturnIndex,
@@ -685,7 +695,8 @@ class BuildCtx {
     AssertingVH<Function> pushInt, popInt;
     AssertingVH<Function> pushBoxed, popBoxed;
     AssertingVH<Function> pushReturnCont, popReturnCont;
-    AssertingVH<Function> malloc;
+    AssertingVH<Function> bumpPointerAlloc;
+    AssertingVH<Function> realMalloc;
     friend class Scoper;
 
     // push a scope for identifier resolution
@@ -861,8 +872,8 @@ class BuildCtx {
                               /*varargs = */ false),
             "enter_dynamic_closure");
 
-        //F->addFnAttr(Attribute::NoInline);
-        F->addFnAttr(Attribute::AlwaysInline);
+        F->addFnAttr(Attribute::NoInline);
+        //F->addFnAttr(Attribute::AlwaysInline);
 
         BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
         builder.SetInsertPoint(entry);
@@ -939,12 +950,15 @@ class BuildCtx {
         return data;
     }
 
-    static Function *createAllocator(Module &m, StgIRBuilder builder, BuildCtx &bctx) {
-        Function *realMalloc = createNewFunction(
-            m,
-            FunctionType::get(builder.getInt8Ty()->getPointerTo(),
-                              {builder.getInt64Ty()}, false),
-            "malloc");
+    static Function *createRealMalloc(Module &m, StgIRBuilder builder, BuildCtx &bctx) {
+        return createNewFunction(
+                m,
+                FunctionType::get(builder.getInt8Ty()->getPointerTo(),
+                                  {builder.getInt64Ty()}, false),
+                "malloc");
+    }
+
+    static Function *createBumpPointerAllocator(Module &m, StgIRBuilder builder, BuildCtx &bctx, Function *realMalloc) {
 
         GlobalVariable *rawHeapMemory = new GlobalVariable(m, builder.getInt8Ty()->getPointerTo(),
                 /*isConstant=*/false,
@@ -986,7 +1000,7 @@ class BuildCtx {
                     m,
                     FunctionType::get(builder.getInt8Ty()->getPointerTo(),
                         {builder.getInt64Ty()}, false),
-                    "alloc");
+                    "bumpPointerAllocator");
 
             alloc->addFnAttr(Attribute::NoInline);
             alloc->addFnAttr(Attribute::InaccessibleMemOnly);
@@ -1071,7 +1085,7 @@ void materializeEnterDynamicClosure(Value *V, Module &m, StgIRBuilder &builder,
     }
 
     CallInst *CI = builder.CreateCall(bctx.enterDynamicClosure, {V});
-    CI->setTailCallKind(CallInst::TCK_MustTail);
+    //CI->setTailCallKind(CallInst::TCK_MustTail);
  
 };
 
@@ -1989,6 +2003,90 @@ StructType *materializeDataConstructor(const DataType *decl,
     return Ty;
 };
 
+void hackEliminateUnusedAlloc(Module &m, BuildCtx &bctx, const int OPTION_OPTIMISATION_LEVEL) {
+
+    Function *bumpPointer = bctx.getBumpPointerAllocator();
+    Function *realMalloc = bctx.getRealMalloc();
+
+    const std::string bumpPointerName = bumpPointer->getName();
+
+    realMalloc->setName("__realmalloc");
+    bumpPointer->setName("__" + bumpPointerName + "__");
+
+    StgIRBuilder builder(m.getContext());
+
+    // create a brand new malloc function.
+    Function *fakeMalloc = cast<Function>(m.getOrInsertFunction("malloc", FunctionType::get(builder.getInt8PtrTy(0), {builder.getInt64Ty()}, false)));
+    fakeMalloc->addFnAttr(llvm::Attribute::InaccessibleMemOnly);
+    fakeMalloc->addFnAttr(llvm::Attribute::NoRecurse);
+    fakeMalloc->addFnAttr(llvm::Attribute::NoUnwind);
+
+    //errs() << __PRETTY_FUNCTION__ << ":" << __LINE__ << "\n";
+    //errs() << "malloc: " << *fakeMalloc<< "\n";
+    //errs() << "malloc->ty: " << *fakeMalloc->getType() << "\n";
+    //errs() << "-\n";
+    //errs() << "bumpPointer: " << *bumpPointer << "\n";
+    //errs() << "bumpPointer->ty: " << *bumpPointer->getType() << "\n";
+
+    assert(bumpPointer->getType() == fakeMalloc->getType() && "different types!");
+    errs() << __PRETTY_FUNCTION__ << ":" << __LINE__ << "\n";
+    errs() << "main with old bump pointer:";
+    m.getFunction("main")->print(errs());
+    bumpPointer->replaceAllUsesWith(fakeMalloc);
+
+    {
+
+        PassBuilder PB;
+
+        ModulePassManager MPM;
+        FunctionPassManager FPM;
+        CGSCCPassManager CGSCCPM;
+
+        PassBuilder::OptimizationLevel optimisationLevel = static_cast<PassBuilder::OptimizationLevel>(
+                (unsigned) PassBuilder::OptimizationLevel::O0 +
+                OPTION_OPTIMISATION_LEVEL);
+        optimisationLevel = PassBuilder::O3;
+
+        if (optimisationLevel > 0) {
+            MPM = PB.buildModuleOptimizationPipeline(optimisationLevel);;
+            FPM = PB.buildFunctionSimplificationPipeline(optimisationLevel,
+                                                         PassBuilder::ThinLTOPhase::None);
+        }
+
+        LoopAnalysisManager LAM;
+        FunctionAnalysisManager FAM;
+        CGSCCAnalysisManager CGAM;
+        ModuleAnalysisManager MAM;
+
+        // Register the AA manager first so that our version is the one used.
+        FAM.registerPass([&] { return PB.buildDefaultAAPipeline(); });
+
+        PB.registerModuleAnalyses(MAM);
+        PB.registerCGSCCAnalyses(CGAM);
+        PB.registerFunctionAnalyses(FAM);
+        PB.registerLoopAnalyses(LAM);
+        PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+
+        // Fix the IR first, then run optimisations.
+        MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
+        MPM.addPass(createModuleToPostOrderCGSCCPassAdaptor(std::move(CGSCCPM)));
+
+        // We need to run the pipeline once for correctness. Anything after that is optimisation.
+        MPM.run(m, MAM);
+    }
+    errs() << "main after bumpPointer replaced + optimisation:";
+    m.getFunction("main")->print(errs());
+
+    fakeMalloc = m.getFunction("malloc");
+    assert(fakeMalloc != nullptr && "unable to find malloc.");
+    assert(bumpPointer->getType() == fakeMalloc->getType() && "different types!");
+    fakeMalloc->replaceAllUsesWith(bumpPointer);
+    fakeMalloc->eraseFromParent();
+
+    bumpPointer->setName(bumpPointerName);
+    realMalloc->setName("malloc");
+}
+
 
 int compile_program(stg::Program *program, cxxopts::Options &opts) {
 
@@ -2079,6 +2177,7 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
             FPM = PB.buildFunctionSimplificationPipeline(optimisationLevel, PassBuilder::ThinLTOPhase::None);
             FPM.addPass(StackMatcherPass("Return"));
             FPM.addPass(StackMatcherPass("Int"));
+            // FPM.addPass(EliminateUnusedAllocPass());
         }
 
         LoopAnalysisManager LAM;
@@ -2105,7 +2204,7 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         MPM.run(*m, MAM);
 
         for (Function &F : *m) {
-            if (F.getName() == "alloc") continue;
+            if (&F == bctx.getBumpPointerAllocator()) continue;
             if (F.getName().count("push")) continue;
             if (F.getName().count("pop")) continue;
             F.removeFnAttr(llvm::Attribute::NoInline);
@@ -2117,6 +2216,8 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
             }
         }
     }
+
+    hackEliminateUnusedAlloc(*m, bctx, OPTION_OPTIMISATION_LEVEL);
 
     // We need to erase enterDynamicClosure, because it is actually
     // slightly _broken_ IR. In the sense that, it cannot actually
