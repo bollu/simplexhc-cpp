@@ -325,7 +325,7 @@ class BuildCtx {
 
     // a map from data constructors to the underlying DataConstructor
     using DataConstructorMap =
-        std::map<ConstructorName, std::tuple<DataConstructor *, Type *>>;
+        std::map<ConstructorName, std::pair<DataConstructor *, Type *>>;
 
     // a map from data types to their underlying DataType.
     using TypeMapTy = std::map<TypeName, StgType *>;
