@@ -11,8 +11,10 @@ using namespace std;
 using namespace std;
 using namespace stg; 
 using namespace llvm;
-extern "C" int yylex();
-extern "C" int yyparse();
+//extern "C" int yylex(void);
+//extern "C" int yyparse(void);
+int yylex(void);
+int yyparse(void);
 
 extern int g_lexer_success;
 extern int g_lexer_line_num;

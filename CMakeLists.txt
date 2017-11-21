@@ -18,7 +18,6 @@ llvm_map_components_to_libnames(LLVM_LIBS AllTargetsAsmPrinters
 find_package(BISON)
 find_package(FLEX)
 bison_target(Parser src/parser.yy ${CMAKE_SOURCE_DIR}/src/parser.generated.cpp COMPILE_FLAGS -v)
-# flex_target(Lexer src/lexer.l  ${CMAKE_SOURCE_DIR}/src/lexer.generated.cpp COMPILE_FLAGS -d)
 flex_target(Lexer src/lexer.l  ${CMAKE_SOURCE_DIR}/src/lexer.generated.cpp)
 add_flex_bison_dependency(Lexer Parser)
 
@@ -34,7 +33,7 @@ add_executable(sxhc
     ${FLEX_Lexer_OUTPUTS}
     )
 
-target_link_libraries(sxhc ${LLVM_LIBS} -lstdc++)
+target_link_libraries(sxhc ${LLVM_LIBS}  -lstdc++)
 set_target_properties(sxhc PROPERTIES CXX_STANDARD 14)
 
 # CLANG FORMAT
