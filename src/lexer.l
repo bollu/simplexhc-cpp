@@ -20,8 +20,8 @@ using namespace stg;
 
 
 using namespace std;
-extern "C" int yylex();
-extern "C" int yyparse();
+// extern "C" int yylex();
+// extern "C" int yyparse();
 
 extern stg::Program *g_program;
 int g_lexer_line_num = 1;

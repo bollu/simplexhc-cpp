@@ -3,7 +3,7 @@ project(sxhc C CXX)
 
 # Colors when compiling with clang
 # set(CMAKE_CXX_FLAGS "-fdiagnostics-color=always -fno-rtti -g -Wall -Werror")
-set(CMAKE_CXX_FLAGS "-fdiagnostics-color=always -fno-rtti -g -Wall -Werror")
+set(CMAKE_CXX_FLAGS "-fdiagnostics-color=always -fno-rtti -g -Wall")
 
 # LLVM
 find_package(LLVM REQUIRED)

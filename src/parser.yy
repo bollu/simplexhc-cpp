@@ -252,7 +252,7 @@ typeraw_typeslist_: CONSTRUCTORNAME typeraw_typeslist_  {
 
 // Parameters
 param:
-  ATOMSTRING COLON typeraw { $$ = new stg::Parameter(cast<AtomIdent>($1)->getIdent(), $3)}
+  ATOMSTRING COLON typeraw { $$ = new stg::Parameter(cast<AtomIdent>($1)->getIdent(), $3); }
 
 params_:
   params_ param { add_param_to_list($2); }
@@ -263,7 +263,7 @@ params:
   params_ CLOSEPAREN {
       g_params_stack.push(g_params);
       g_params = {};
-  }| OPENPAREN CLOSEPAREN {
+  } | OPENPAREN CLOSEPAREN {
     g_params_stack.push(ParamList());
     g_params = {};
   }
@@ -273,7 +273,7 @@ lambda:
     OPENFLOWER expr CLOSEFLOWER 
       { 
         $$ = new stg::Lambda(g_params_stack.top(), *$4, $6);
-        g_params_stack.pop()
+        g_params_stack.pop();
       }
   |
   // syntax for free vars
@@ -294,8 +294,7 @@ letbindings: binding { g_let_bindings.push_back($1); } |
 
 expr:
   // function application
-  ATOMSTRING atomlist { $$ = new stg::ExpressionAp(cast<AtomIdent>($1)->getIdent(), *$2);
-                        }
+  ATOMSTRING atomlist { $$ = new stg::ExpressionAp(cast<AtomIdent>($1)->getIdent(), *$2); }
   | CONSTRUCTORNAME atomlist { 
     $$ = new stg::ExpressionConstructor(*$1, *$2);
     delete $1;
