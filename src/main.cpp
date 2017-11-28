@@ -4,6 +4,7 @@
 #include "sxhc/RuntimeDebugBuilder.h"
 #include "sxhc/stgir.h"
 #include "sxhc/optimizer.h"
+#include "sxhc/libstg.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -186,6 +187,12 @@ static AssertingVH<Function> createNewFunction(Module &m, FunctionType *FTy,
         errs() << "\n";
     }
     return Function::Create(FTy, GlobalValue::ExternalLinkage, name, &m);
+}
+
+static void createCallTrap(Module &m, StgIRBuilder &builder) {
+    Function *trap = getOrCreateFunction(
+            m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
+    builder.CreateCall(trap);
 }
 
 static Value *TransmuteToInt(Value *V, StgIRBuilder &builder) {
@@ -872,8 +879,8 @@ class BuildCtx {
                               /*varargs = */ false),
             "enter_dynamic_closure");
 
-        F->addFnAttr(Attribute::NoInline);
-        //F->addFnAttr(Attribute::AlwaysInline);
+        //F->addFnAttr(Attribute::NoInline);
+        F->addFnAttr(Attribute::AlwaysInline);
 
         BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
         builder.SetInsertPoint(entry);
@@ -974,7 +981,7 @@ class BuildCtx {
                                                            "rawHeapMemoryTop");
 
 
-        static const uint64_t HEAP_SIZE = 1ull /*bytes*/ *  1024ull /*kb*/ * 1024ull /*mb*/ * 1024ull /*gb*/ * 32ull;
+        static const uint64_t HEAP_SIZE = 1ull /*bytes*/ *  1024ull /*kb*/ * 1024ull /*mb*/ * 1024ull /*gn*/ * 32ull;
         std::cout<< "HEAP_SIZE: " << HEAP_SIZE << "\n";
         static const uint64_t HEAP_SIZE_SAFETY = 1ull /*bytes*/ *  1024ull /*kb*/ * 1024ull /*mb*/ * 1024ull /*gb*/ * 31ull;
         // static const uint64_t HEAP_SIZE_SAFETY = HEAP_SIZE - 512ull; // 1024 /*kb*/ * 1024 /*mb*/ * 1024 /*gb*/ * 5;
@@ -987,9 +994,23 @@ class BuildCtx {
             appendToGlobalCtors(m, memInitializer, 0, rawHeapMemory);
             BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", memInitializer);
             builder.SetInsertPoint(entry);
-            Value *rawmem = builder.CreateCall(realMalloc, {builder.getInt64(HEAP_SIZE)}, "rawmem");
+            Value *valueHeapSize = builder.getInt64(HEAP_SIZE);
+            Value *rawmem = builder.CreateCall(realMalloc, {valueHeapSize}, "rawmem");
+            Value *mallocAddr = builder.CreatePtrToInt(rawmem,builder.getInt64Ty(), "malloc_addr");
+            Value *isNull = builder.CreateICmpEQ(mallocAddr, builder.getInt64(0), "is_malloc_nullptr");
+
+            BasicBlock *Success = BasicBlock::Create(m.getContext(), "success", memInitializer);
+            BasicBlock *Failure = BasicBlock::Create(m.getContext(), "MallocNull", memInitializer);
+            builder.CreateCondBr(isNull, Failure, Success);
+
+            builder.SetInsertPoint(Success);
             builder.CreateStore(rawmem, rawHeapMemory);
             builder.CreateStore(builder.getInt64(0), heapMemoryTop);
+            builder.CreateRetVoid();
+
+            builder.SetInsertPoint(Failure);
+            sxhc::RuntimeDebugBuilder::createCPUPrinter(builder, "malloc returned null for heap size: ", valueHeapSize, "\n");
+            createCallTrap(m, builder);
             builder.CreateRetVoid();
         }
 
@@ -1085,7 +1106,7 @@ void materializeEnterDynamicClosure(Value *V, Module &m, StgIRBuilder &builder,
     }
 
     CallInst *CI = builder.CreateCall(bctx.enterDynamicClosure, {V});
-    //CI->setTailCallKind(CallInst::TCK_MustTail);
+    CI->setTailCallKind(CallInst::TCK_MustTail);
  
 };
 
@@ -2015,18 +2036,10 @@ void hackEliminateUnusedAlloc(Module &m, BuildCtx &bctx, const int OPTION_OPTIMI
 
     StgIRBuilder builder(m.getContext());
 
-    // create a brand new malloc function.
     Function *fakeMalloc = cast<Function>(m.getOrInsertFunction("malloc", FunctionType::get(builder.getInt8PtrTy(0), {builder.getInt64Ty()}, false)));
     fakeMalloc->addFnAttr(llvm::Attribute::InaccessibleMemOnly);
     fakeMalloc->addFnAttr(llvm::Attribute::NoRecurse);
     fakeMalloc->addFnAttr(llvm::Attribute::NoUnwind);
-
-    //errs() << __PRETTY_FUNCTION__ << ":" << __LINE__ << "\n";
-    //errs() << "malloc: " << *fakeMalloc<< "\n";
-    //errs() << "malloc->ty: " << *fakeMalloc->getType() << "\n";
-    //errs() << "-\n";
-    //errs() << "bumpPointer: " << *bumpPointer << "\n";
-    //errs() << "bumpPointer->ty: " << *bumpPointer->getType() << "\n";
 
     assert(bumpPointer->getType() == fakeMalloc->getType() && "different types!");
     errs() << __PRETTY_FUNCTION__ << ":" << __LINE__ << "\n";
@@ -2075,20 +2088,24 @@ void hackEliminateUnusedAlloc(Module &m, BuildCtx &bctx, const int OPTION_OPTIMI
         MPM.run(m, MAM);
     }
     errs() << "main after bumpPointer replaced + optimisation:";
-    m.getFunction("main")->print(errs());
-
-    fakeMalloc = m.getFunction("malloc");
-    assert(fakeMalloc != nullptr && "unable to find malloc.");
-    assert(bumpPointer->getType() == fakeMalloc->getType() && "different types!");
-    fakeMalloc->replaceAllUsesWith(bumpPointer);
-    fakeMalloc->eraseFromParent();
+    if ((fakeMalloc = m.getFunction("malloc"))) {
+        assert(fakeMalloc != nullptr && "unable to find malloc.");
+        assert(bumpPointer->getType() == fakeMalloc->getType() && "different types!");
+        fakeMalloc->replaceAllUsesWith(bumpPointer);
+        fakeMalloc->eraseFromParent();
+    }
+    else {
+        assert(false && "we no longer have malloc");
+    }
 
     bumpPointer->setName(bumpPointerName);
     realMalloc->setName("malloc");
 }
 
 
+void linkInLibStg() __attribute__((used));
 int compile_program(stg::Program *program, cxxopts::Options &opts) {
+    linkInLibStg();
 
     // ask LLVM to kindly initialize all of its knowledge about targets.
     InitializeAllTargetInfos();
@@ -2217,7 +2234,7 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         }
     }
 
-    hackEliminateUnusedAlloc(*m, bctx, OPTION_OPTIMISATION_LEVEL);
+    // hackEliminateUnusedAlloc(*m, bctx, OPTION_OPTIMISATION_LEVEL);
 
     // We need to erase enterDynamicClosure, because it is actually
     // slightly _broken_ IR. In the sense that, it cannot actually
@@ -2327,3 +2344,8 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
 
     return 0;
 }
+
+void linkInLibStg()  {
+    printOnlyInt(42);
+}
+
