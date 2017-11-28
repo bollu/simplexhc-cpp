@@ -18,6 +18,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
+#include "sxhc/libstg.h"
 
 using namespace llvm;
 using namespace orc;
@@ -52,6 +53,9 @@ class SimpleJIT {
                 return JITSymbol(nullptr);
             },
             [](const std::string &Name) {
+                errs() << "** looking for symbol: " << Name << " in current process.\n";
+                if (Name == "printOnlyInt")
+                    return JITSymbol((JITTargetAddress)&printOnlyInt, JITSymbolFlags::Exported);
                 if (auto SymAddr =
                         RTDyldMemoryManager::getSymbolAddressInProcess(Name)) {
                     return JITSymbol(SymAddr, JITSymbolFlags::Exported);
