@@ -15,5 +15,5 @@ extern void pushInt(int64_t);
 
 
 void printOnlyInt(int64_t i) {
-    printf("%d", i);
+    printf("%ld", i);
 }
