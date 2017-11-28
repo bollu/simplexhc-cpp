@@ -349,7 +349,7 @@ class BuildCtx {
     AssertingVH<GlobalVariable> stackBoxed;
     AssertingVH<GlobalVariable> stackBoxedTop;
 
-    AssertingVH<GlobalVariable> enteringClosureAddr;
+    // AssertingVH<GlobalVariable> enteringClosureAddr;
     AssertingVH<Function> enterDynamicClosure;
 
     static const unsigned MAX_FREE_PARAMS = 10;
@@ -377,7 +377,7 @@ class BuildCtx {
         invariantGroupNode = mdbuilder.createAnonymousAliasScopeDomain("closure_invariant_group");
 
         // *** ContTy ***
-        ContTy = FunctionType::get(builder.getVoidTy(), {}, false);
+        ContTy = FunctionType::get(builder.getVoidTy(), {builder.getInt8PtrTy()}, false);
 
         populateIntrinsicTypes(m, builder, dataTypeMap, dataConstructorMap,
                                primIntTy, boxedTy);
@@ -401,10 +401,10 @@ class BuildCtx {
                  pushBoxed, popBoxed, stackBoxed, stackBoxedTop, llvmNoDebug);
 
         // *** enteringClosureAddr ***
-        enteringClosureAddr = new GlobalVariable(
-            m, builder.getInt64Ty(), /*isConstant=*/false,
-            GlobalValue::ExternalLinkage,
-            ConstantInt::get(builder.getInt64Ty(), 0), "enteringClosureAddr");
+        // enteringClosureAddr = new GlobalVariable(
+        //     m, builder.getInt64Ty(), /*isConstant=*/false,
+        //     GlobalValue::ExternalLinkage,
+        //     ConstantInt::get(builder.getInt64Ty(), 0), "enteringClosureAddr");
 
         // ClosureTy
         std::vector<Type *> StructMemberTys;
@@ -523,7 +523,6 @@ class BuildCtx {
     void createPushBoxed(StgIRBuilder &builder, Value *Boxed) const {
         Value *BoxedVoidPtr = builder.CreateBitCast(Boxed, builder.getInt8Ty()->getPointerTo(), Boxed->getName() + ".voidptr");
         builder.CreateCall(this->pushBoxed, {BoxedVoidPtr});
-        //CI->setCallingConv(CallingConv::Fast);
 
     };
 
@@ -899,13 +898,13 @@ class BuildCtx {
         // builder.getInt64Ty(), "cont_addr");
 
         // store the address of the closure we are entering
-        Value *closureAddr = builder.CreatePtrToInt(
-            closureRaw, builder.getInt64Ty(), "closure_addr");
-        StoreInst *SI = builder.CreateStore(closureAddr, bctx.enteringClosureAddr);
-        SI->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
+        // Value *closureAddr = builder.CreatePtrToInt(
+        //     closureRaw, builder.getInt64Ty(), "closure_addr");
+        // StoreInst *SI = builder.CreateStore(closureAddr, bctx.enteringClosureAddr);
+        // SI->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
 
         // call the function
-        CallInst *CI = builder.CreateCall(cont, {});
+        CallInst *CI = builder.CreateCall(cont, {closureRaw});
         CI->setTailCallKind(CallInst::TCK_MustTail);
         builder.CreateRetVoid();
         return F;
@@ -981,9 +980,9 @@ class BuildCtx {
                                                            "rawHeapMemoryTop");
 
 
-        static const uint64_t HEAP_SIZE = 1ull /*bytes*/ *  1024ull /*kb*/ * 1024ull /*mb*/ * 1024ull /*gn*/ * 32ull;
+        static const uint64_t HEAP_SIZE = 1ull /*bytes*/ *  1024ull /*kb*/ * 1024ull /*mb*/ * 1024ull /*gn*/ * 1ull * 10ull;
         std::cout<< "HEAP_SIZE: " << HEAP_SIZE << "\n";
-        static const uint64_t HEAP_SIZE_SAFETY = 1ull /*bytes*/ *  1024ull /*kb*/ * 1024ull /*mb*/ * 1024ull /*gb*/ * 31ull;
+        static const uint64_t HEAP_SIZE_SAFETY = HEAP_SIZE - 1000;
         // static const uint64_t HEAP_SIZE_SAFETY = HEAP_SIZE - 512ull; // 1024 /*kb*/ * 1024 /*mb*/ * 1024 /*gb*/ * 5;
         std::cout<< "HEAP_SIZE_SAFETY: " << HEAP_SIZE_SAFETY << "\n";
 
@@ -1281,7 +1280,7 @@ Function *materializeCaseConstructorReturnFrame(
     std::stringstream scrutineeNameSS;
     scrutineeNameSS << *c->getScrutinee();
     Function *f = createNewFunction(
-        m, FunctionType::get(builder.getVoidTy(), {}, /*isVarArg=*/false),
+        m, FunctionType::get(builder.getVoidTy(), {builder.getInt8PtrTy()}, /*isVarArg=*/false),
         "case_alt_" + scrutineeNameSS.str());
     BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", f);
     builder.SetInsertPoint(entry);
@@ -1291,11 +1290,13 @@ Function *materializeCaseConstructorReturnFrame(
     // materializeDynamicLetBinding Open a new scope.
     BuildCtx::Scoper s(bctx);
     if (freeVarsInAlts.size() > 0) {
-        LoadInst *closureAddr =
-            builder.CreateLoad(bctx.enteringClosureAddr, "closure_addr_int");
-         closureAddr->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
-        Value *closure = builder.CreateIntToPtr(
-            closureAddr, bctx.ClosureTy[freeVarsInAlts.size()]->getPointerTo(),
+        // LoadInst *closureAddr =
+        //     builder.CreateLoad(bctx.enteringClosureAddr, "closure_addr_int");
+        //  closureAddr->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
+        Value *closureRaw = &*f->arg_begin();
+        closureRaw->setName("closure_raw");
+        Value *closure = builder.CreateBitCast(
+            closureRaw, bctx.ClosureTy[freeVarsInAlts.size()]->getPointerTo(),
             "closure_typed");
         int i = 0;
         for (Identifier id : freeVarsInAlts) {
@@ -1403,7 +1404,7 @@ Function *materializePrimitiveCaseReturnFrame(
     namess << "case_" << *c->getScrutinee() << "_alts";
 
     Function *F = createNewFunction(
-        m, FunctionType::get(builder.getVoidTy(), {}, /*isVarArg=*/false),
+        m, FunctionType::get(builder.getVoidTy(), {builder.getInt8PtrTy()}, /*isVarArg=*/false),
         namess.str());
     BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
     builder.SetInsertPoint(entry);
@@ -1413,11 +1414,14 @@ Function *materializePrimitiveCaseReturnFrame(
     // materializeDynamicLetBinding Open a new scope.
     BuildCtx::Scoper s(bctx);
     if (freeVarsInAlts.size() > 0) {
-        LoadInst *closureAddr =
-            builder.CreateLoad(bctx.enteringClosureAddr, "closure_addr_int");
-         closureAddr->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
-        Value *closure = builder.CreateIntToPtr(
-            closureAddr, bctx.ClosureTy[freeVarsInAlts.size()]->getPointerTo(),
+        // LoadInst *closureAddr =
+        //     builder.CreateLoad(bctx.enteringClosureAddr, "closure_addr_int");
+        //  closureAddr->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
+        Value *closureRaw = F->arg_begin();
+        closureRaw->setName("closure_raw");
+
+        Value *closure = builder.CreateBitCast(
+            closureRaw, bctx.ClosureTy[freeVarsInAlts.size()]->getPointerTo(),
             "closure_typed");
         int i = 0;
         for (Identifier id : freeVarsInAlts) {
@@ -1430,7 +1434,6 @@ Function *materializePrimitiveCaseReturnFrame(
         }
     }
     // **** COPY PASTE END
-
     Value *scrutinee = bctx.createPopInt(builder, "scrutinee");
     BasicBlock *defaultBB =
         BasicBlock::Create(m.getContext(), "alt_default", F);
@@ -1811,7 +1814,7 @@ void loadFreeVariableFromClosure(Value *closure, Identifier name,
 Function *_materializeDynamicLetBinding(const Binding *b, Module &m,
                                         StgIRBuilder builder, BuildCtx &bctx) {
     FunctionType *FTy =
-        FunctionType::get(builder.getVoidTy(), /*isVarArg=*/false);
+        FunctionType::get(builder.getVoidTy(), {builder.getInt8PtrTy()}, /*isVarArg=*/false);
     Function *F =
         Function::Create(FTy, GlobalValue::ExternalLinkage, b->getName(), &m);
 
@@ -1820,14 +1823,17 @@ Function *_materializeDynamicLetBinding(const Binding *b, Module &m,
     BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
     builder.SetInsertPoint(entry);
 
-    LoadInst *closureAddr =
-        builder.CreateLoad(bctx.enteringClosureAddr, "closure_addr_int");
-     closureAddr->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
+    // LoadInst *closureAddr =
+    //     builder.CreateLoad(bctx.enteringClosureAddr, "closure_addr_int");
+    //  closureAddr->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
+    Argument *closureRaw = &*F->arg_begin();
+    closureRaw->setName("closure_raw");
+    Value *closure = builder.CreateBitCast(closureRaw, bctx.ClosureTy[b->getRhs()->free_params_size()]->getPointerTo(), "closure_typed");
 
-    Value *closure = builder.CreateIntToPtr(
-        closureAddr,
-        bctx.ClosureTy[b->getRhs()->free_params_size()]->getPointerTo(),
-        "closure_typed");
+    // Value *closure = builder.CreateIntToPtr(
+    //     closureAddr,
+    //     bctx.ClosureTy[b->getRhs()->free_params_size()]->getPointerTo(),
+    //     "closure_typed");
     BuildCtx::Scoper s(bctx);
 
     int i = 0;
