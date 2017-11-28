@@ -29,6 +29,7 @@ add_executable(sxhc
     src/main.cpp
     src/RuntimeDebugBuilder.cpp
     src/stgir.cpp
+    lib/libstg.c
     ${BISON_Parser_OUTPUTS}
     ${FLEX_Lexer_OUTPUTS}
     )
@@ -52,13 +53,6 @@ add_custom_target(
 add_library(stgruntime
     SHARED lib/libstg.c)
 set_target_properties(stgruntime PROPERTIES C_STANDARD 99)
-
-
-
-#sxhcpasses, so they can be loaded into opt
-add_library(sxhcpasses SHARED lib/optimizer.cpp)
-target_link_libraries(sxhcpasses ${LLVM_LIBS} -lstdc++)
-set_target_properties(sxhcpasses PROPERTIES CXX_STANDARD 14)
 
 # DOXYGEN
 # first we can indicate the documentation build as an option and set it to ON by default
@@ -85,5 +79,3 @@ else (DOXYGEN_FOUND)
   message("Doxygen need to be installed to generate the doxygen documentation")
 endif (DOXYGEN_FOUND)
 
-# add stgruntime to sxhc so the JIT has access to all functions from stgruntime.
-target_link_libraries(sxhc stgruntime)
