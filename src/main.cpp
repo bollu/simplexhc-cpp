@@ -449,6 +449,14 @@ class BuildCtx {
         this->insertTopLevelBinding("primAdd", new StgFunctionType(this->primIntTy, {this->primIntTy, this->primIntTy}), *primAdd);
         delete primAdd;
 
+        // *** primMult *** //
+        //
+        LLVMClosureData *primMult = addPrimArithBinopToModule("primMult", [](StgIRBuilder builder, Value *a, Value *b){
+            return builder.CreateMul(a, b);
+        }, m, builder, *this);
+        this->insertTopLevelBinding("primMult", new StgFunctionType(this->primIntTy, {this->primIntTy, this->primIntTy}), *primMult);
+        delete primMult;
+
         // *** printInt *** //
         printInt = [&] {
             Function *F =
@@ -2066,7 +2074,6 @@ void hackEliminateUnusedAlloc(Module &m, BuildCtx &bctx, const int OPTION_OPTIMI
         PassBuilder::OptimizationLevel optimisationLevel = static_cast<PassBuilder::OptimizationLevel>(
                 (unsigned) PassBuilder::OptimizationLevel::O0 +
                 OPTION_OPTIMISATION_LEVEL);
-        optimisationLevel = PassBuilder::O3;
 
         if (optimisationLevel > 0) {
             MPM = PB.buildModuleOptimizationPipeline(optimisationLevel);;
@@ -2195,14 +2202,12 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         CGSCCPassManager CGSCCPM;
 
         PassBuilder::OptimizationLevel optimisationLevel = static_cast<PassBuilder::OptimizationLevel>((unsigned)PassBuilder::OptimizationLevel::O0 + OPTION_OPTIMISATION_LEVEL);
-        optimisationLevel = PassBuilder::O3;
 
         if (optimisationLevel > 0) {
             MPM = PB.buildModuleOptimizationPipeline(optimisationLevel);;
             FPM = PB.buildFunctionSimplificationPipeline(optimisationLevel, PassBuilder::ThinLTOPhase::None);
             FPM.addPass(StackMatcherPass("Return"));
             FPM.addPass(StackMatcherPass("Int"));
-            // FPM.addPass(EliminateUnusedAllocPass());
         }
 
         LoopAnalysisManager LAM;
@@ -2236,7 +2241,7 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
             F.addFnAttr(llvm::Attribute::AlwaysInline);
         }
         if (optimisationLevel > 0) {
-            for (int i = 0; i < 10; i++) {
+            for (int i = 0; i < 50; i++) {
                 MPM.run(*m, MAM);
             }
         }
