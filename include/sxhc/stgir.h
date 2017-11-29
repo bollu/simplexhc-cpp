@@ -105,7 +105,7 @@ class DataType {
     void print(std::ostream &os) const;
     friend std::ostream &operator<<(std::ostream &os, const DataType &decl);
     unsigned getIndexForConstructor(const DataConstructor *needle) const {
-        for (int i = 0; i < constructors.size(); i++) {
+        for (unsigned i = 0; i < constructors.size(); i++) {
             if (constructors[i] == needle) return i;
         }
 

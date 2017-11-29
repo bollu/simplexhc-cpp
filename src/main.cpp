@@ -1261,9 +1261,9 @@ static const StgType *getCommonDataTypeFromAlts(const ExpressionCase *c,
                 std::get<0>(bctx.getDataConstructorFromName(
                     destructure->getConstructorName()));
             setCommonType(bctx.getTypeFromName(dc->getParent()->getTypeName()));
-        } else if (CaseAltInt *i = dyn_cast<CaseAltInt>(a)) {
+        } else if (isa<CaseAltInt>(a)) {
             assert(false && "unimplemented type deduction");
-        } else if (CaseAltVariable *d = dyn_cast<CaseAltVariable>(a)) {
+        } else if (isa<CaseAltVariable>(a)) {
             assert(false &&
                    "unimplemented  type deduction for case alt variable");
         } else {
@@ -1676,7 +1676,7 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
     errs() << "===" << __FUNCTION__ << ":FreeVarsInAlts():===" <<  "\n";
     cerr << *c;
     errs() << "---free vars:---\n";
-    for(int i = 0; i < freeVarsInAlts.size(); i++) {
+    for(unsigned i = 0; i < freeVarsInAlts.size(); i++) {
         errs() << i << ":" << freeVarsInAlts[i] << "\n";
     }
     errs()  << "=========\n";
@@ -1772,7 +1772,7 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
 Value *_allocateLetBindingDynamicClosure(const Binding *b, BasicBlock *BB,
                                          Module &m, StgIRBuilder builder,
                                          BuildCtx &bctx) {
-    const int nFreeParams = b->getRhs()->free_params_size();
+    const unsigned nFreeParams = b->getRhs()->free_params_size();
     assert(nFreeParams < bctx.MAX_FREE_PARAMS);
 
     Type *closureTy = bctx.ClosureTy[nFreeParams];
@@ -1992,6 +1992,7 @@ LLVMClosureData materializeStaticClosureForFn(Function *F, std::string name,
                            GlobalValue::ExternalLinkage, initializer, name);
     return LLVMClosureData(F, closure);
 }
+
 
 // Create a top-level static binding from a "binding" that is parsed in STG.
 LLVMClosureData materializeEmptyTopLevelStaticBinding(const Binding *b, Module &m,

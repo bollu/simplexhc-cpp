@@ -101,13 +101,14 @@ public:
             StackMatcherPass::propogatePushToPop(r);
         }
 
-        // first propogate then delete because multiple pushes can use the same pop.
-        // eg:
-        //       A - push
-        //      / \
-        // pop- B  C-pop
-        //
-        // We expect the push to be propogated to both B and C, and then we remove the push.
+        /* first propogate then delete because multiple pushes can use the same pop.
+         eg:
+               A - push
+              / \
+         pop- B  C-pop
+        
+         We expect the push to be propogated to both B and C, and then we remove the push.
+         */
         {
             std::set<CallInst *>pushes;
             for (PushPopPair r : replacements) {
@@ -193,7 +194,7 @@ private:
         // list of push/pop pairs of all children.
         std::vector<InterBlockPushPopPairs> childPpsList;
 
-        for(int i = 0; i < TI->getNumSuccessors(); i++) {
+        for(unsigned i = 0; i < TI->getNumSuccessors(); i++) {
             BasicBlock *Next = TI->getSuccessor(i);
             if (!DT.dominates(&BB, Next)) continue;
 

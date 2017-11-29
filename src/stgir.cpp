@@ -6,9 +6,9 @@ template<typename T>
 void printSepBy(std::ostream &os, std::string prefix, ArrayRef<T *> ts, std::string separator, std::string postfix) {
   os << prefix;
 
-  for(int i = 0; i < ts.size(); i++) {
+  for(unsigned i = 0; i < ts.size(); i++) {
     os << *ts[i];
-    if (i <= (int)ts.size() - 2) {
+    if (i + 2 <= ts.size()) {
       os << separator;
     }
 
@@ -20,9 +20,9 @@ template<typename T>
 void printSepBy(std::ostream &os, std::string prefix, ArrayRef<T> ts, std::string separator, std::string postfix) {
   os << prefix;
 
-  for(int i = 0; i < ts.size(); i++) {
+  for(unsigned i = 0; i < ts.size(); i++) {
     os << ts[i];
-    if (i <= (int)ts.size() - 2) {
+    if (i + 2 <= ts.size()) {
       os << separator;
     }
 
