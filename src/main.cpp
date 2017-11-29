@@ -453,8 +453,9 @@ class BuildCtx {
         printInt = [&] {
             Function *F =
                 createNewFunction(m,
-                                  FunctionType::get(builder.getVoidTy(),
-                                                    /*isVarArg=*/false),
+                                  FunctionType::get(builder.getVoidTy(), 
+                                      {builder.getInt8PtrTy()},
+                                      /*isVarArg=*/false),
                                   "printInt");
 
             Function *printOnlyInt = getOrCreateFunction(
@@ -919,7 +920,7 @@ class BuildCtx {
                                                     BuildCtx &bctx) {
         Function *F =
             createNewFunction(m,
-                              FunctionType::get(builder.getVoidTy(), {},
+                              FunctionType::get(builder.getVoidTy(), {builder.getInt8PtrTy()},
                                                 /*varargs = */ false),
                               name);
         F->addFnAttr(llvm::Attribute::AlwaysInline);
@@ -1999,7 +2000,7 @@ LLVMClosureData materializeEmptyTopLevelStaticBinding(const Binding *b, Module &
     assert(b->getRhs()->free_params_size() == 0 &&
            "top level bindings cannot have any free paramters.");
     FunctionType *FTy =
-        FunctionType::get(builder.getVoidTy(), /*isVarArg=*/false);
+        FunctionType::get(builder.getVoidTy(), {builder.getInt8PtrTy()}, /*isVarArg=*/false);
     Function *F =
         Function::Create(FTy, GlobalValue::ExternalLinkage, b->getName(), &m);
     F->addFnAttr(llvm::Attribute::AlwaysInline);
