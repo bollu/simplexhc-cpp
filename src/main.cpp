@@ -301,7 +301,7 @@ class Scope {
     }
 };
 
-static const int STACK_SIZE = 1000ull * 500ull;
+static const int STACK_SIZE = 1000ull * 1000ull;
 
 class AliasCtx {
     MDNode *caseClosureScopeList;
@@ -999,7 +999,7 @@ class BuildCtx {
                                                            "rawHeapMemoryTop");
 
 
-        static const uint64_t HEAP_SIZE = 1ull /*bytes*/ *  1024ull /*kb*/ * 1024ull /*mb*/ * 1024ull /*gn*/ * 1ull * 10ull;
+        static const uint64_t HEAP_SIZE = 1ull /*bytes*/ *  1024ull /*kb*/ * 1024ull /*mb*/ * 1024ull /*gn*/ * 1ull * 28ull;
         std::cout<< "HEAP_SIZE: " << HEAP_SIZE << "\n";
         static const uint64_t HEAP_SIZE_SAFETY = HEAP_SIZE - 1000;
         // static const uint64_t HEAP_SIZE_SAFETY = HEAP_SIZE - 512ull; // 1024 /*kb*/ * 1024 /*mb*/ * 1024 /*gb*/ * 5;
@@ -1079,6 +1079,7 @@ class BuildCtx {
 
             BasicBlock *trapBB = BasicBlock::Create(m.getContext(), "trap", alloc);
             builder.SetInsertPoint(trapBB);
+            sxhc::RuntimeDebugBuilder::createCPUPrinter(builder, "blew past heap safety. Total heap size: " + std::to_string(HEAP_SIZE) + "bytes. Safety margin: " + std::to_string(HEAP_SIZE_SAFETY) + "bytes.\n");
             Function *trap = getOrCreateFunction(
                     m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
             builder.CreateCall(trap, {});
