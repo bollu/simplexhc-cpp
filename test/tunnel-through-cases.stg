@@ -1,0 +1,23 @@
+# Check that LLVM is smart enough to tunnel throguh cases
+# RUN: %loadSimplexhc %s  --jit | FileCheck %s
+# CHECK: 7
+
+# RUN: %loadSimplexhc %s  --emit-llvm -O 3 | FileCheck %s -check-prefix=IR
+# IR:      define void @main(i8*) #0 {
+# IR-NEXT: entry:
+# IR-NEXT:   tail call void @printOnlyInt(i64 0)
+#
+
+binding sub7 = \(a : PrimInt) -> PrimInt {
+    case a () of
+        0 -> 1;
+        x -> case primSubtract (x 1) of
+                xmin1 -> case primSubtract (xmin1 2) of
+                                xmin3 -> primSubtract(xmin3 4);;;
+};
+
+
+binding main = \() -> Boxed { 
+    case  sub7 (7) of
+            x -> printInt (x);
+};
