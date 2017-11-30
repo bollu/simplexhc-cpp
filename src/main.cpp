@@ -2230,9 +2230,6 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
         MPM.addPass(createModuleToPostOrderCGSCCPassAdaptor(std::move(CGSCCPM)));
 
-        // We need to run the pipeline once for correctness. Anything after that is optimisation.
-        MPM.run(*m, MAM);
-
         for (Function &F : *m) {
             if (&F == bctx.getBumpPointerAllocator()) continue;
             if (F.getName().count("push")) continue;
