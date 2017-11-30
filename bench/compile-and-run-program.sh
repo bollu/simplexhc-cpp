@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 set -o xtrace
 set -e
-SIMPLEXHC=../build/sxhc
-LIBSTGPATH=../build/
+SIMPLEXHC=sxhc
+LIBSTGPATH=/home/bollu/work/sxhc/build/
 # LLC=llc
 LLVMEXTRACT=/Users/bollu/work/LLVM-all/polly/llvm_build_ninja/bin/llvm-extract
-LLC=/Users/bollu/work/LLVM-all/polly/llvm_build_ninja/bin/llc
-OPT=/Users/bollu/work/LLVM-all/polly/llvm_build_ninja/bin/opt
+LLC=/home/bollu/build/llvm-5.0/build/bin/llc
+OPT=/home/bollu/build/llvm-5.0/build/bin/opt
 CC=gcc
 
 OUTO=$1".out.o"
 OUTLL=$1".out.ll"
 
 $SIMPLEXHC  $1 --emit-llvm -o $OUTLL ${@:2}  -O 3
-$OPT  -instnamer  $OUTLL -S -o temp; mv temp $OUTLL
+$OPT  -O3 -instnamer $OUTLL -S -o temp; mv temp $OUTLL
 
 $LLC $OUTLL -o $OUTO -filetype=obj -O 3
 
