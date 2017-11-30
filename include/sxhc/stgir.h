@@ -578,6 +578,7 @@ class Lambda {
             boundparams.push_back(p);
         }
     }
+    void __attribute__((used)) dump() const { print(std::cout); };
     void print(std::ostream &os, int nest=0) const;
     friend std::ostream &operator<<(std::ostream &os, const Lambda &l);
 
