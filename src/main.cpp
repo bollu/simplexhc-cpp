@@ -670,6 +670,12 @@ class BuildCtx {
     Function *getRealMalloc() const {
         return realMalloc;
     }
+    
+    void setRealMalloc(Function *newRealMalloc) {
+        assert(newRealMalloc != nullptr);
+        assert(this->getRealMalloc()->getNumUses() == 0);
+        realMalloc = newRealMalloc;
+    }
 
     Function *getBumpPointerAllocator() const {
         return bumpPointerAlloc;
@@ -705,6 +711,17 @@ class BuildCtx {
        private:
         BuildCtx &bctx;
     };
+
+
+
+    // NOTE: this is public because we need this for our hack :]
+    static Function *createRealMalloc(Module &m, StgIRBuilder builder, BuildCtx &bctx) {
+        return createNewFunction(
+                m,
+                FunctionType::get(builder.getInt8Ty()->getPointerTo(),
+                                  {builder.getInt64Ty()}, false),
+                "malloc");
+    }
 
    private:
     AssertingVH<Function> pushInt, popInt;
@@ -965,13 +982,6 @@ class BuildCtx {
         return data;
     }
 
-    static Function *createRealMalloc(Module &m, StgIRBuilder builder, BuildCtx &bctx) {
-        return createNewFunction(
-                m,
-                FunctionType::get(builder.getInt8Ty()->getPointerTo(),
-                                  {builder.getInt64Ty()}, false),
-                "malloc");
-    }
 
     static Function *createBumpPointerAllocator(Module &m, StgIRBuilder builder, BuildCtx &bctx, Function *realMalloc) {
 
@@ -1964,6 +1974,11 @@ void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
 
 void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
                        BuildCtx &bctx) {
+
+    Function *F = builder.GetInsertBlock()->getParent();
+    assert(F);
+    F->dump();
+    
     BuildCtx::Scoper scoper(bctx);
     for (const Parameter *p : l->bound_params_range()) {
         const StgType *Ty = bctx.getTypeFromRawType(p->getTypeRaw());
@@ -1981,6 +1996,7 @@ void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
         }
     }
     materializeExpr(l->getRhs(), m, builder, bctx);
+    
 }
 
 // Create a static closure for a top-level function. That way, we don't need
@@ -2052,6 +2068,7 @@ void hackEliminateUnusedAlloc(Module &m, BuildCtx &bctx, const int OPTION_OPTIMI
 
     StgIRBuilder builder(m.getContext());
 
+    assert(m.getFunction("malloc") == nullptr && "malloc still around!");
     Function *fakeMalloc = cast<Function>(m.getOrInsertFunction("malloc", FunctionType::get(builder.getInt8PtrTy(0), {builder.getInt64Ty()}, false)));
     fakeMalloc->addFnAttr(llvm::Attribute::InaccessibleMemOnly);
     fakeMalloc->addFnAttr(llvm::Attribute::NoRecurse);
@@ -2060,7 +2077,6 @@ void hackEliminateUnusedAlloc(Module &m, BuildCtx &bctx, const int OPTION_OPTIMI
     assert(bumpPointer->getType() == fakeMalloc->getType() && "different types!");
     errs() << __PRETTY_FUNCTION__ << ":" << __LINE__ << "\n";
     errs() << "main with old bump pointer:";
-    m.getFunction("main")->print(errs());
     bumpPointer->replaceAllUsesWith(fakeMalloc);
 
     {
@@ -2102,7 +2118,7 @@ void hackEliminateUnusedAlloc(Module &m, BuildCtx &bctx, const int OPTION_OPTIMI
         // We need to run the pipeline once for correctness. Anything after that is optimisation.
         MPM.run(m, MAM);
     }
-    errs() << "main after bumpPointer replaced + optimisation:";
+
     if ((fakeMalloc = m.getFunction("malloc"))) {
         assert(fakeMalloc != nullptr && "unable to find malloc.");
         assert(bumpPointer->getType() == fakeMalloc->getType() && "different types!");
@@ -2110,7 +2126,7 @@ void hackEliminateUnusedAlloc(Module &m, BuildCtx &bctx, const int OPTION_OPTIMI
         fakeMalloc->eraseFromParent();
     }
     else {
-        assert(false && "we no longer have malloc");
+
     }
 
     bumpPointer->setName(bumpPointerName);
@@ -2118,9 +2134,7 @@ void hackEliminateUnusedAlloc(Module &m, BuildCtx &bctx, const int OPTION_OPTIMI
 }
 
 
-void linkInLibStg() __attribute__((used));
 int compile_program(stg::Program *program, cxxopts::Options &opts) {
-    linkInLibStg();
 
     // ask LLVM to kindly initialize all of its knowledge about targets.
     InitializeAllTargetInfos();
@@ -2237,9 +2251,11 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
             F.removeFnAttr(llvm::Attribute::NoInline);
             F.addFnAttr(llvm::Attribute::AlwaysInline);
         }
+
         if (optimisationLevel > 0) {
-            for (int i = 0; i < 50; i++) {
+            for (int i = 0; i < 100; i++) {
                 MPM.run(*m, MAM);
+                hackEliminateUnusedAlloc(*m, bctx, optimisationLevel);
             }
         }
     }
@@ -2334,9 +2350,5 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
     }
 
     return 0;
-}
-
-void linkInLibStg()  {
-    printOnlyInt(42);
 }
 
