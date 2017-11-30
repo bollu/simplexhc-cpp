@@ -2203,7 +2203,7 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
 
         PassBuilder::OptimizationLevel optimisationLevel = static_cast<PassBuilder::OptimizationLevel>((unsigned)PassBuilder::OptimizationLevel::O0 + OPTION_OPTIMISATION_LEVEL);
 
-        if (optimisationLevel > 0) {
+        if (optimisationLevel > PassBuilder::OptimizationLevel::O0) {
             MPM = PB.buildModuleOptimizationPipeline(optimisationLevel);;
             FPM = PB.buildFunctionSimplificationPipeline(optimisationLevel, PassBuilder::ThinLTOPhase::None);
             FPM.addPass(StackMatcherPass("Return"));
