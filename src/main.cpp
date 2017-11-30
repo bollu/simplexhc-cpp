@@ -2244,25 +2244,6 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         }
     }
 
-    // hackEliminateUnusedAlloc(*m, bctx, OPTION_OPTIMISATION_LEVEL);
-
-    // We need to erase enterDynamicClosure, because it is actually
-    // slightly _broken_ IR. In the sense that, it cannot actually
-    // musttail.
-    //
-    // musttail void enter_dynamic_closure(f: (() -> ())*) {
-    //     ...
-    //     musttail f()
-    // }
-    //
-    //     This musttail is incorrect because the signatures of
-    //     enter_dynamic_closure and f don't match.
-    //     However, we ensure that after inlining enter_dynamic_closure,
-    //     the signatures work out.
-    Function *F = bctx.enterDynamicClosure;
-    bctx.enterDynamicClosure = nullptr;
-    F->eraseFromParent();
-
     delete bctxPtr;
 
     if (verifyModule(*m, nullptr) == 1) {
