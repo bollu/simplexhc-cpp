@@ -87,10 +87,12 @@ public:
         assert(!F.isDeclaration() && "expected F to be a definition.");
         std::set<PushPopPair> inter, intra;
 
-        std::tie(inter, intra) = visitBB(F.getEntryBlock(),
-                                         std::stack<CallInst *>(),
-                                         DT,
-                                         std::set<BasicBlock *>());
+        {
+            std::set<BasicBlock *>Visited;
+            std::tie(inter, intra) = visitBB(F.getEntryBlock(),
+                    std::stack<CallInst *>(),
+                    DT,Visited);
+        }
 
         std::set<PushPopPair> replacements;
         replacements.insert(inter.begin(), inter.end());
@@ -135,11 +137,13 @@ private:
     // intra = any set of push/pop that is below the current BB
     // inter = any push/pop that is mix of things below and above the
     // current BB.
-    std::pair<IntraBlockPushPopPairs, InterBlockPushPopPairs> visitBB(BasicBlock &BB, std::stack<CallInst *> pushStack, const DominatorTree &DT, std::set<BasicBlock *> Visited) {
+    std::pair<IntraBlockPushPopPairs, InterBlockPushPopPairs> visitBB(BasicBlock &BB, std::stack<CallInst *> pushStack, const DominatorTree &DT, std::set<BasicBlock *> &Visited) {
 
-        Visited.insert(&BB);
+
         IntraBlockPushPopPairs intraBlockPushPopPairs;
         InterBlockPushPopPairs interBlockPushPopPairs;
+        if (Visited.count(&BB)) return std::make_pair(intraBlockPushPopPairs, interBlockPushPopPairs);
+        Visited.insert(&BB);
 
         std::set<CallInst *> toDelete;
 
