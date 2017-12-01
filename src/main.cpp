@@ -396,6 +396,9 @@ class BuildCtx {
                  pushReturnCont, popReturnCont, stackReturnCont,
                  stackReturnContTop, llvmNoDebug);
 
+        pushReturnCont->setCallingConv(CallingConv::Fast);
+        popReturnCont->setCallingConv(CallingConv::Fast);
+
         // *** Heap ***
         addStack(m, builder, *this, getRawMemTy(builder), "Boxed", STACK_SIZE,
                  pushBoxed, popBoxed, stackBoxed, stackBoxedTop, llvmNoDebug);
@@ -465,6 +468,7 @@ class BuildCtx {
                                       {builder.getInt8PtrTy()},
                                       /*isVarArg=*/false),
                                   "printInt");
+            F->setCallingConv(CallingConv::Fast);
 
             Function *printOnlyInt = getOrCreateFunction(
                 m,
@@ -545,12 +549,14 @@ class BuildCtx {
     Value *createPushReturn(StgIRBuilder &builder, Value *Cont) const {
         Value *voidptr = builder.CreateBitCast(Cont, builder.getInt8Ty()->getPointerTo(), Cont->getName() + ".voidptr");
         CallInst *CI = builder.CreateCall(this->pushReturnCont, {voidptr});
+        CI->setCallingConv(CallingConv::Fast);
         return CI;
 
     }
 
     CallInst *createPopReturn(StgIRBuilder &builder, std::string name) const {
         CallInst *CI = builder.CreateCall(this->popReturnCont, {}, name);
+        CI->setCallingConv(CallingConv::Fast);
         return CI;
 
     }
@@ -689,6 +695,7 @@ class BuildCtx {
                                    name + ".raw");
         rawmem->addAttribute(AttributeList::ReturnIndex,
                              llvm::Attribute::NoAlias);
+        rawmem->setCallingConv(CallingConv::Fast);
         assert(rawmem->returnDoesNotAlias());
 
         if (resultPointerTy) {
@@ -906,6 +913,7 @@ class BuildCtx {
 
         //F->addFnAttr(Attribute::NoInline);
         F->addFnAttr(Attribute::AlwaysInline);
+        F->setCallingConv(CallingConv::Fast);
 
         BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
         builder.SetInsertPoint(entry);
@@ -932,6 +940,7 @@ class BuildCtx {
         // call the function
         CallInst *CI = builder.CreateCall(cont, {closureRaw});
         CI->setTailCallKind(CallInst::TCK_MustTail);
+        CI->setCallingConv(CallingConv::Fast);
         builder.CreateRetVoid();
         return F;
     }
@@ -949,6 +958,7 @@ class BuildCtx {
                                                 /*varargs = */ false),
                               name);
         F->addFnAttr(llvm::Attribute::AlwaysInline);
+        F->setCallingConv(CallingConv::Fast);
         BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
         builder.SetInsertPoint(entry);
         Value *i = bctx.createPopInt(builder, "i");
@@ -1043,6 +1053,7 @@ class BuildCtx {
 
             alloc->addFnAttr(Attribute::NoInline);
             alloc->addFnAttr(Attribute::InaccessibleMemOnly);
+            alloc->setCallingConv(CallingConv::Fast);
             // this is fucked, but in a cool way: GC makes memory allocation pure :)
             // alloc->addFnAttr(Attribute::ReadNone);
             // Why does readnone fuck it up?
@@ -1126,6 +1137,7 @@ void materializeEnterDynamicClosure(Value *V, Module &m, StgIRBuilder &builder,
 
     CallInst *CI = builder.CreateCall(bctx.enterDynamicClosure, {V});
     CI->setTailCallKind(CallInst::TCK_MustTail);
+    CI->setCallingConv(llvm::CallingConv::Fast);
  
 };
 
@@ -1713,6 +1725,7 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
         }
     }();
     continuation->addFnAttr(llvm::Attribute::AlwaysInline);
+    continuation->setCallingConv(CallingConv::Fast);
 
     Type *closureTy = bctx.ClosureTy[freeVarsInAlts.size()];
     Value *clsTyped = bctx.createCallAllocate(builder, m.getDataLayout().getTypeAllocSize(closureTy), "closure", closureTy->getPointerTo());
@@ -2030,6 +2043,7 @@ LLVMClosureData materializeEmptyTopLevelStaticBinding(const Binding *b, Module &
     Function *F =
         Function::Create(FTy, GlobalValue::ExternalLinkage, b->getName(), &m);
     F->addFnAttr(llvm::Attribute::AlwaysInline);
+    F->setCallingConv(CallingConv::Fast);
 
     return materializeStaticClosureForFn(F, b->getName() + "_closure", m,
                                          builder, bctx);
