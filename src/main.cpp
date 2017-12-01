@@ -999,7 +999,7 @@ class BuildCtx {
                                                            "rawHeapMemoryTop");
 
 
-        static const uint64_t HEAP_SIZE = 1ull /*bytes*/ *  1024ull /*kb*/ * 1024ull /*mb*/ * 1024ull /*gn*/ * 1ull * 28ull;
+        static const uint64_t HEAP_SIZE = 1ull /*bytes*/ *  1024ull /*kb*/ * 1024ull /*mb*/ * 1024ull /*gn*/ * 1ull * 10ull;
         std::cout<< "HEAP_SIZE: " << HEAP_SIZE << "\n";
         static const uint64_t HEAP_SIZE_SAFETY = HEAP_SIZE - 1000;
         // static const uint64_t HEAP_SIZE_SAFETY = HEAP_SIZE - 512ull; // 1024 /*kb*/ * 1024 /*mb*/ * 1024 /*gb*/ * 5;
@@ -2136,7 +2136,6 @@ void hackEliminateUnusedAlloc(Module &m, BuildCtx &bctx, const int OPTION_OPTIMI
 
 
 int compile_program(stg::Program *program, cxxopts::Options &opts) {
-
     // ask LLVM to kindly initialize all of its knowledge about targets.
     InitializeAllTargetInfos();
     InitializeAllTargets();
