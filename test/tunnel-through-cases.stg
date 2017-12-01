@@ -3,9 +3,9 @@
 # CHECK: 7
 
 # RUN: %loadSimplexhc %s  --emit-llvm -O 3 | FileCheck %s -check-prefix=IR
-# IR:      define void @main(i8*) #0 {
-# IR-NEXT: entry:
-# IR-NEXT:   tail call void @printOnlyInt(i64 0)
+#IR:      define fastcc void @main(i8*) #0 {
+#IR-NEXT: entry:
+#IR-NEXT:   tail call void @printOnlyInt(i64 0)
 #
 
 binding sub7 = \(a : PrimInt) -> PrimInt {

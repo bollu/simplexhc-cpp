@@ -403,6 +403,9 @@ class BuildCtx {
         addStack(m, builder, *this, getRawMemTy(builder), "Boxed", STACK_SIZE,
                  pushBoxed, popBoxed, stackBoxed, stackBoxedTop, llvmNoDebug);
 
+        pushBoxed->setCallingConv(CallingConv::Fast);
+        popBoxed->setCallingConv(CallingConv::Fast);
+
         // *** enteringClosureAddr ***
         // enteringClosureAddr = new GlobalVariable(
         //     m, builder.getInt64Ty(), /*isConstant=*/false,
@@ -535,13 +538,16 @@ class BuildCtx {
 
     void createPushBoxed(StgIRBuilder &builder, Value *Boxed) const {
         Value *BoxedVoidPtr = builder.CreateBitCast(Boxed, builder.getInt8Ty()->getPointerTo(), Boxed->getName() + ".voidptr");
-        builder.CreateCall(this->pushBoxed, {BoxedVoidPtr});
+        CallInst *CI = builder.CreateCall(this->pushBoxed, {BoxedVoidPtr});
+        CI->setCallingConv(CallingConv::Fast);
+
 
     };
 
 
     Value *createPopBoxedVoidPtr(StgIRBuilder &builder, std::string name) const {
         CallInst *CI = builder.CreateCall(this->popBoxed, {}, name + ".voidptr");
+        CI->setCallingConv(CallingConv::Fast);
         return CI;
         //return CI;
     }
@@ -1852,6 +1858,7 @@ Function *_materializeDynamicLetBinding(const Binding *b, Module &m,
         Function::Create(FTy, GlobalValue::ExternalLinkage, b->getName(), &m);
 
     F->addFnAttr(llvm::Attribute::AlwaysInline);
+    F->setCallingConv(CallingConv::Fast);
 
     BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
     builder.SetInsertPoint(entry);
