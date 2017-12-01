@@ -1,0 +1,25 @@
+# RUN: %loadSimplexhc %s  --jit | FileCheck %s
+# CHECK: 120
+
+
+# a complicated way to return 1 for positive inputs.
+# here to check that llvm can tear through recursion. Let's see.
+# fib(0) = 0
+# fib(1) = 1
+# fib(n) = fib(n - 1) + fib(n - 2)
+binding fib = \(a : PrimInt) -> PrimInt {
+    case a () of
+        0 -> 0;
+        1 -> 1;
+        x -> case primSubtract (x 1) of
+                xmin1 -> case fib (xmin1) of
+                            fibxmin1 -> case primSubtract (x 2) of
+                                            xmin2 -> case fib (xmin2) of
+                                                        fibxmin2 -> primAdd (fibxmin1 fibxmin2);;;;;
+};
+
+
+binding main = \() -> Boxed { 
+    case  fib (40) of
+            x -> printInt (x);
+};
