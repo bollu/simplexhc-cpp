@@ -31,6 +31,7 @@
 #include "sxhc/types.h"
 
 #define DEBUG_TYPE "stackMatcher"
+bool debug = false;
 using PushPopPair = std::pair<llvm::CallInst *, llvm::CallInst *>;
 
 // We assume that both A and B have only inter-block push and pop pairs.
@@ -79,6 +80,15 @@ class StackMatcherPass : public PassInfoMixin<StackMatcherPass> {
         if (F.isDeclaration()) {
             return llvm::PreservedAnalyses::all();
         }
+        if (F.getName() == "main" && stackname == "Int") {
+            static int count = 0;
+            count++;
+            if (count == 100) {
+                debug = true;
+                errs() << __PRETTY_FUNCTION__ << "::main count: " << count
+                       << "\n";
+            }
+        }
         // if (F.getName() != "main") return llvm::PreservedAnalyses::all();
 
         DominatorTree &DT = FAM.getResult<DominatorTreeAnalysis>(F);
@@ -96,7 +106,7 @@ class StackMatcherPass : public PassInfoMixin<StackMatcherPass> {
         replacements.insert(intra.begin(), intra.end());
 
         for (PushPopPair r : replacements) {
-            StackMatcherPass::propogatePushToPop(r);
+            StackMatcherPass::propogatePushToPop(r, DT);
         }
 
         /* first propogate then delete because multiple pushes can use the same
@@ -130,17 +140,52 @@ class StackMatcherPass : public PassInfoMixin<StackMatcherPass> {
     using InterBlockPushPopPairs = std::set<PushPopPair>;
     using IntraBlockPushPopPairs = std::set<PushPopPair>;
 
+
+    // Create a pairing for instruction "me"
+    // myStack contains stack of my type
+    // pairStack contains stack of dual, to be paried with
+    // pairer is a function that creates a pushPopPair
+    // intra and inter and the respective pair sets to be pushed into
+    // if a pair is created.
+    static void createPairing(
+        CallInst *me, std::stack<CallInst *> &myStack,
+        std::stack<CallInst *> &pairStack,
+        std::function<PushPopPair(CallInst *me, CallInst *pair_)> pairer,
+        IntraBlockPushPopPairs &intra, InterBlockPushPopPairs &inter) {
+
+        // both stacks are not allowed to have elements at the same time.
+        // If that was the case, they should have been paired up.
+        assert(!(myStack.size() > 0 && pairStack.size() > 0));
+        if (pairStack.size()) {
+            CallInst *partner = pairStack.top();
+            pairStack.pop();
+
+            PushPopPair p = pairer(me, partner);
+            if (me->getParent() == partner->getParent()) {
+                intra.insert(p);
+            } else {
+                inter.insert(p);
+            }
+        } else {
+            myStack.push(me);
+        }
+    }
+
     // intra = any set of push/pop that is below the current BB
     // inter = any push/pop that is mix of things below and above the
     // current BB.
     std::pair<IntraBlockPushPopPairs, InterBlockPushPopPairs> visitBB(
         BasicBlock &BB, std::stack<CallInst *> pushStack,
-        const DominatorTree &DT, std::set<BasicBlock *> &Visited) {
+        const DominatorTree &DT,
+        std::set<BasicBlock *> &Visited) {
         IntraBlockPushPopPairs intraBlockPushPopPairs;
         InterBlockPushPopPairs interBlockPushPopPairs;
         if (Visited.count(&BB))
             return std::make_pair(intraBlockPushPopPairs,
                                   interBlockPushPopPairs);
+
+        if (debug) errs() << __PRETTY_FUNCTION__ << BB.getName() << "\n";
+
         Visited.insert(&BB);
 
         std::set<CallInst *> toDelete;
@@ -158,20 +203,33 @@ class StackMatcherPass : public PassInfoMixin<StackMatcherPass> {
             const std::string calleeName = CI->getCalledFunction()->getName();
             if (calleeName == "push" + stackname) {
                 pushStack.push(CI);
-                // dbgs() << "pushing: " << *CI << "\n";
+                // NOTE: this will wind up associating _pops_ with _pushes_ as well. Example:
+                // x = pop
+                // y = push(10)
+                // x will be associated with y as a pushPopPair. This is _not_ what we want.
+                // We wish to only go in the "forward" direction.
+
+                // createPairing(CI, pushStack, popStack, [](CallInst *push, CallInst *pop) {
+                //         return std::make_pair(push, pop);
+                //         }, intraBlockPushPopPairs, interBlockPushPopPairs);
 
             } else if (calleeName == "pop" + stackname) {
-                // We do not have a matching push, our function is incomplete.
-                // continue
-                if (pushStack.size() == 0) continue;
+                // NOTE: this would be  super useful as an _analysis_ of the function.
+                // createPairing(CI, popStack, pushStack, [](CallInst *pop, CallInst *push) {
+                //        return std::make_pair(push, pop);
+                //        }, intraBlockPushPopPairs, interBlockPushPopPairs);
+                // We have an unmatched pop. Continue, we can't do anything about it.
+                if (!pushStack.size()) continue;
+                assert(pushStack.size() >= 0);
                 CallInst *Push = pushStack.top();
                 pushStack.pop();
-
-                // intra block
+                assert(DT.dominates(Push, CI));
+                PushPopPair ppp  = std::make_pair(Push, CI);
                 if (Push->getParent() == CI->getParent()) {
-                    intraBlockPushPopPairs.insert(std::make_pair(Push, CI));
-                } else {
-                    interBlockPushPopPairs.insert(std::make_pair(Push, CI));
+                    intraBlockPushPopPairs.insert(ppp);
+                }
+                else {
+                    interBlockPushPopPairs.insert(ppp);
                 }
             }
         }
@@ -198,6 +256,18 @@ class StackMatcherPass : public PassInfoMixin<StackMatcherPass> {
         for (unsigned i = 0; i < TI->getNumSuccessors(); i++) {
             BasicBlock *Next = TI->getSuccessor(i);
             if (!DT.dominates(&BB, Next)) continue;
+            // We need to ensure that the only control flow into this BB must be us.
+            // This will disallow cases like this:
+            // Entry
+            //  |
+            //  v
+            //  A <---*
+            //  |     |
+            //  |     |
+            //  v    |
+            //  B----*
+            // Here, Entry `dom` A, but we cannot use Entry's state _into_ A.
+            if (Next->getUniquePredecessor() != &BB) continue;
 
             IntraBlockPushPopPairs curIntra;
             InterBlockPushPopPairs curInter;
@@ -229,15 +299,27 @@ class StackMatcherPass : public PassInfoMixin<StackMatcherPass> {
             }
         }
 
-        return std::make_pair(
-            intraBlockPushPopPairs,
-            InterBlockPushPopPairs());  // interBlockPushPopPairs);
+        return std::make_pair(intraBlockPushPopPairs, interBlockPushPopPairs);
     }
 
-    static void propogatePushToPop(PushPopPair r) {
+    static void propogatePushToPop(PushPopPair r, DominatorTree &DT) {
         CallInst *Push = r.first;
         CallInst *Pop = r.second;
+        errs() << "---\n";
+        errs() << "propogating push: \n\t" << *Push << "|" << Push->getParent()->getName() << "\n\t" << *Pop << "|" << Pop->getParent()->getName() << "\n";
         Value *PushedVal = Push->getArgOperand(0);
+
+        if (Push->getParent() == Pop->getParent()) {
+            errs() << "Intra BB push/pop:\n";
+            Push->getParent()->dump();
+        }
+        else {
+            errs() << "*** INTER BB PUSH/POP***\n";
+            Push->getParent()->getParent()->dump();
+        }
+        assert(DT.dominates(Push, Pop) && "push must dominate pop to propagate them.");
+        errs() << "---\n";
+
         BasicBlock::iterator ii(Pop);
         ReplaceInstWithValue(Pop->getParent()->getInstList(), ii, PushedVal);
     }
@@ -266,9 +348,6 @@ class SinkPushPass : public PassInfoMixin<SinkPushPass> {
         }
 
         if (F.getName() != "main") return llvm::PreservedAnalyses::all();
-        errs() << "### main:\n";
-        errs() << F << "\n";
-        errs() << "-----";
 
         // map from push to pops that accept it.
         std::map<CallInst *, std::vector<CallInst *>> pushToAcceptingPops =
@@ -282,7 +361,7 @@ class SinkPushPass : public PassInfoMixin<SinkPushPass> {
                 return matchedPops;
             }();
 
-        for(auto it : pushToAcceptingPops) {
+        for (auto it : pushToAcceptingPops) {
             errs() << "Push: " << *it.first;
             for (CallInst *CI : it.second) {
                 errs() << "\tPop: " << *CI << "\n";

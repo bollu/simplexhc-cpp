@@ -2217,7 +2217,7 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
             FPM = PB.buildFunctionSimplificationPipeline(optimisationLevel, PassBuilder::ThinLTOPhase::None);
             FPM.addPass(StackMatcherPass("Return"));
             FPM.addPass(StackMatcherPass("Int"));
-            FPM.addPass(SinkPushPass("Return"));
+            // FPM.addPass(SinkPushPass("Return"));
         }
 
         LoopAnalysisManager LAM;
@@ -2249,7 +2249,7 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         }
 
         if (optimisationLevel > 0) {
-            for (int i = 0; i < 100; i++) {
+            for (int i = 0; i < 10; i++) {
                 MPM.run(*m, MAM);
                 hackEliminateUnusedAlloc(*m, bctx, optimisationLevel);
             }
