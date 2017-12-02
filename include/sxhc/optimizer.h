@@ -250,7 +250,6 @@ Instruction *getOwningInst(User *U) {
         return getOwningInst(*C->users().begin());
     }
 
-    errs() << "unknown value: " << *U << "\n";
     report_fatal_error("unreachable code in getOwningInst");
 }
 
@@ -266,8 +265,30 @@ class SinkPushPass : public PassInfoMixin<SinkPushPass> {
             return llvm::PreservedAnalyses::all();
         }
 
+        if (F.getName() != "main") return llvm::PreservedAnalyses::all();
+        errs() << "### main:\n";
+        errs() << F << "\n";
+        errs() << "-----";
+
         // map from push to pops that accept it.
-        std::map<CallInst *, std::vector<CallInst *>> pushToAcceptingPops;
+        std::map<CallInst *, std::vector<CallInst *>> pushToAcceptingPops =
+            [&F, this] {
+                std::map<CallInst *, std::vector<CallInst *>> matchedPops;
+                std::set<BasicBlock *> Visited;
+                BasicBlock *Entry = &F.getEntryBlock();
+
+                findPushAndMatch(stackname, Entry, Entry->begin(), matchedPops,
+                                 Visited);
+                return matchedPops;
+            }();
+
+        for(auto it : pushToAcceptingPops) {
+            errs() << "Push: " << *it.first;
+            for (CallInst *CI : it.second) {
+                errs() << "\tPop: " << *CI << "\n";
+            }
+        }
+        return llvm::PreservedAnalyses::none();
     }
 
     void getAnalysisUsage(AnalysisUsage &AU) const {
@@ -310,10 +331,11 @@ class SinkPushPass : public PassInfoMixin<SinkPushPass> {
         // BB had no pops.
         const TerminatorInst *TI = CurBB->getTerminator();
         assert(TI && "BB has no terminator!");
-        for (int i = 0; i < TI->getNumSuccessors(); i++) {
+        for (unsigned i = 0; i < TI->getNumSuccessors(); i++) {
             BasicBlock *Next = TI->getSuccessor(i);
             if (Next->getUniquePredecessor() == CurBB) {
-                findPushAndMatch(stackname, Next, Next->begin(), matchedPops, Visited);
+                findPushAndMatch(stackname, Next, Next->begin(), matchedPops,
+                                 Visited);
             }
         }
     }
@@ -341,7 +363,7 @@ class SinkPushPass : public PassInfoMixin<SinkPushPass> {
         // BB had no pops.
         const TerminatorInst *TI = CurBB->getTerminator();
         assert(TI && "BB has no terminator!");
-        for (int i = 0; i < TI->getNumSuccessors(); i++) {
+        for (unsigned i = 0; i < TI->getNumSuccessors(); i++) {
             BasicBlock *Next = TI->getSuccessor(i);
             if (Next->getUniquePredecessor() == CurBB) {
                 getMatchingPops(stackname, Next, Next->begin(), push,
@@ -388,7 +410,7 @@ class EliminateUnusedAllocPass
             // store  <val> <maybeescapingval> does NOT escape.
             // store  <maybeescapingval> <escapeloc> DOES escape.
             return SI->getOperand(0) == MaybeEscapingVal;
-        } else if (auto LI = dyn_cast<LoadInst>(I)) {
+        } else if (isa<LoadInst>(I)) {
             return false;
         } else if (isa<BitCastInst>(I) || isa<GetElementPtrInst>(I)) {
             return doesEscape(I, MaybeEscapingVal);

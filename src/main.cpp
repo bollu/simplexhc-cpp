@@ -181,11 +181,7 @@ static AssertingVH<Function> getOrCreateFunction(Module &m, FunctionType *FTy,
 static AssertingVH<Function> createNewFunction(Module &m, FunctionType *FTy,
                                                std::string name) {
     Function *F = m.getFunction(name);
-    if (F) {
-        errs() << "Function with name:(" << name << ") already exists:\n";
-        F->print(errs());
-        errs() << "\n";
-    }
+    assert(F == nullptr && "function with name already exists");
     return Function::Create(FTy, GlobalValue::ExternalLinkage, name, &m);
 }
 
@@ -1262,7 +1258,6 @@ void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
         if (bctx.getTypeFromName(cons->getTypeName(i)) == bctx.getPrimIntTy()) {
             LoadInst *LI = builder.CreateLoad(Slot, "cons_" + std::to_string(i));
              LI->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
-            errs() << "*" << __FUNCTION__ << ":" << __LINE__ <<  "\n";
             bctx.insertIdentifier(var, LLVMValueData(LI, bctx.getPrimIntTy()));
         } else {
             LoadInst *LI = builder.CreateLoad(
@@ -1271,7 +1266,6 @@ void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
             Value *V = builder.CreateIntToPtr(LI, getRawMemTy(builder),
                                        "cons_rawmem_" + std::to_string(i));
             const StgType *Ty = bctx.getTypeFromName(cons->getTypeName(i));
-            errs() << "*" << __FUNCTION__ << ":" << __LINE__ <<  "\n";
             bctx.insertIdentifier(var, LLVMValueData(V, Ty));
         }
         i++;
@@ -1340,7 +1334,6 @@ Function *materializeCaseConstructorReturnFrame(
         for (Identifier id : freeVarsInAlts) {
             // HACK: need correct type info
             const StgType *ty = bctx.getIdentifier(id).stgtype;
-            errs() << "*" << __FUNCTION__ << ":" << __LINE__ << "\n";
             loadFreeVariableFromClosure(closure, id, ty, i, builder, entry,
                                         bctx);
             i++;
@@ -1465,7 +1458,6 @@ Function *materializePrimitiveCaseReturnFrame(
         for (Identifier id : freeVarsInAlts) {
             // HACK: need correct type info
             const StgType *ty = bctx.getIdentifier(id).stgtype;
-            errs() << "*" << __FUNCTION__ << ":" << __LINE__ << "\n";
             loadFreeVariableFromClosure(closure, id, ty, i, builder, entry,
                                         bctx);
             i++;
@@ -1526,7 +1518,6 @@ Function *materializePrimitiveCaseReturnFrame(
         builder.SetInsertPoint(defaultBB);
         // create a binding between the scrutinee and the variable name of
         // the alt.
-        errs() << "*" << __FUNCTION__ << ":" << __LINE__ <<  "\n";
         bctx.insertIdentifier(cv->getLHS(),
                               LLVMValueData(scrutinee, bctx.getPrimIntTy()));
         materializeExpr(cv->getRHS(), m, builder, bctx);
@@ -1610,9 +1601,7 @@ std::set<Identifier> getFreeVarsInExpression(
             break;
         }
         case Expression::EK_Let: {
-            errs() << __FUNCTION__ << ":" << __LINE__ << "\n";
             const ExpressionLet *let = cast<ExpressionLet>(e);
-            errs() << __FUNCTION__ << ":" << __LINE__ << "\n";
 
             // a let binding encloses all of the let defined
             // variables inside it, so we can remove those from the
@@ -1710,13 +1699,6 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
         return vecids;
     }();
 
-    errs() << "===" << __FUNCTION__ << ":FreeVarsInAlts():===" <<  "\n";
-    cerr << *c;
-    errs() << "---free vars:---\n";
-    for(unsigned i = 0; i < freeVarsInAlts.size(); i++) {
-        errs() << i << ":" << freeVarsInAlts[i] << "\n";
-    }
-    errs()  << "=========\n";
 
     const Expression *scrutinee = c->getScrutinee();
     const StgType *scrutineety = getTypeOfExpression(scrutinee, bctx);
@@ -1842,7 +1824,6 @@ void loadFreeVariableFromClosure(Value *closure, Identifier name,
         v = builder.CreateIntToPtr(v, getRawMemTy(builder), name + "_rawmem");
     }
 
-    errs() << "*" << __FUNCTION__ << ":" << __LINE__ << "\n";
     bctx.insertIdentifier(name, LLVMValueData(v, ty));
 }
 
@@ -1879,7 +1860,6 @@ Function *_materializeDynamicLetBinding(const Binding *b, Module &m,
     int i = 0;
     for (Parameter *p : b->getRhs()->free_params_range()) {
         const StgType *ty = bctx.getTypeFromRawType(p->getTypeRaw());
-        errs() << "*" << __FUNCTION__ << ":" << __LINE__ << "\n";
         loadFreeVariableFromClosure(closure, p->getName(), ty, i, builder,
                                     entry, bctx);
         i++;
@@ -1918,7 +1898,6 @@ void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
         // consider the type of a let-binding to be the return type. Is this
         // cheating? Sure.
         assert(true && "what type do I assign to a let-binding?");
-        errs() << "*" << __FUNCTION__ << ":" << __LINE__ <<  "\n";
         bctx.insertIdentifier(b->getName(), LLVMValueData(cls, bindingty));
     }
 
@@ -2005,7 +1984,6 @@ void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
         const StgType *Ty = bctx.getTypeFromRawType(p->getTypeRaw());
         if (Ty == bctx.getPrimIntTy()) {
             Value *pv = bctx.createPopInt(builder, "param_" + p->getName());
-            errs() << "*" << __FUNCTION__ << ":" << __LINE__ <<  "\n";
             bctx.insertIdentifier(p->getName(),
                                   LLVMValueData(pv, bctx.getPrimIntTy()));
         } else {
@@ -2097,8 +2075,6 @@ void hackEliminateUnusedAlloc(Module &m, BuildCtx &bctx, const int OPTION_OPTIMI
     fakeMalloc->addFnAttr(llvm::Attribute::NoUnwind);
 
     assert(bumpPointer->getType() == fakeMalloc->getType() && "different types!");
-    errs() << __PRETTY_FUNCTION__ << ":" << __LINE__ << "\n";
-    errs() << "main with old bump pointer:";
     bumpPointer->replaceAllUsesWith(fakeMalloc);
 
     {
@@ -2243,6 +2219,7 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
             FPM = PB.buildFunctionSimplificationPipeline(optimisationLevel, PassBuilder::ThinLTOPhase::None);
             FPM.addPass(StackMatcherPass("Return"));
             FPM.addPass(StackMatcherPass("Int"));
+            FPM.addPass(SinkPushPass("Return"));
         }
 
         LoopAnalysisManager LAM;
