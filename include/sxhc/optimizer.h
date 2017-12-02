@@ -2,7 +2,6 @@
 #include <iostream>
 #include <set>
 #include <sstream>
-#include "sxhc/types.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -14,50 +13,50 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/TargetRegistry.h"
+#include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
-#include "llvm/Support/TargetRegistry.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
-#include "llvm/IR/LegacyPassManager.h"
-#include "llvm/Passes/PassBuilder.h"
-#include "llvm/Transforms/Utils/ModuleUtils.h"
-#include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
-
+#include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Transforms/Utils/ModuleUtils.h"
+#include "sxhc/types.h"
 
 #define DEBUG_TYPE "stackMatcher"
 using PushPopPair = std::pair<llvm::CallInst *, llvm::CallInst *>;
 
-
 // We assume that both A and B have only inter-block push and pop pairs.
-std::set<PushPopPair> getCommonAllowedPushPopPairs(std::set<PushPopPair> A, std::set<PushPopPair> B) {
+std::set<PushPopPair> getCommonAllowedPushPopPairs(std::set<PushPopPair> A,
+                                                   std::set<PushPopPair> B) {
     const std::set<llvm::CallInst *> commonPushes = [&] {
         std::set<llvm::CallInst *> apushes;
 
-        for (PushPopPair pa: A) apushes.insert(pa.first);
+        for (PushPopPair pa : A) apushes.insert(pa.first);
 
         std::set<llvm::CallInst *> commonPushes;
-        for(PushPopPair pb : B) {
+        for (PushPopPair pb : B) {
             assert(pb.first != pb.second);
-            if(apushes.count(pb.first)) {
+            if (apushes.count(pb.first)) {
                 commonPushes.insert(pb.first);
             }
-
         }
         return commonPushes;
     }();
 
     std::set<PushPopPair> result;
 
-    auto insertCommonPairs = [&] (const std::set<PushPopPair > &pairs, std::set<PushPopPair> &container) {
+    auto insertCommonPairs = [&](const std::set<PushPopPair> &pairs,
+                                 std::set<PushPopPair> &container) {
         std::set<PushPopPair> ps;
-        for(PushPopPair p : pairs)
+        for (PushPopPair p : pairs)
             if (commonPushes.count(p.first)) container.insert(p);
 
         return ps;
@@ -67,20 +66,19 @@ std::set<PushPopPair> getCommonAllowedPushPopPairs(std::set<PushPopPair> A, std:
     insertCommonPairs(B, result);
 
     return result;
-
 }
 
 using namespace llvm;
 // Pass to match abstract stack manipulations and eliminate them.
 class StackMatcherPass : public PassInfoMixin<StackMatcherPass> {
-public:
+   public:
     explicit StackMatcherPass(StringRef stackname) : stackname(stackname) {}
-    static StringRef name() { return "stackMatcher"; }
+    static StringRef name() { return "StackMatcher"; }
 
     PreservedAnalyses run(Function &F, FunctionAnalysisManager &FAM) {
-
-
-        if (F.isDeclaration()) { return llvm::PreservedAnalyses::all(); }
+        if (F.isDeclaration()) {
+            return llvm::PreservedAnalyses::all();
+        }
         // if (F.getName() != "main") return llvm::PreservedAnalyses::all();
 
         DominatorTree &DT = FAM.getResult<DominatorTreeAnalysis>(F);
@@ -88,36 +86,35 @@ public:
         std::set<PushPopPair> inter, intra;
 
         {
-            std::set<BasicBlock *>Visited;
-            std::tie(inter, intra) = visitBB(F.getEntryBlock(),
-                    std::stack<CallInst *>(),
-                    DT,Visited);
+            std::set<BasicBlock *> Visited;
+            std::tie(inter, intra) = visitBB(
+                F.getEntryBlock(), std::stack<CallInst *>(), DT, Visited);
         }
 
         std::set<PushPopPair> replacements;
         replacements.insert(inter.begin(), inter.end());
         replacements.insert(intra.begin(), intra.end());
 
-
         for (PushPopPair r : replacements) {
             StackMatcherPass::propogatePushToPop(r);
         }
 
-        /* first propogate then delete because multiple pushes can use the same pop.
-         eg:
-               A - push
+        /* first propogate then delete because multiple pushes can use the same
+         pop. eg: A - push
               / \
          pop- B  C-pop
-        
-         We expect the push to be propogated to both B and C, and then we remove the push.
+
+         We expect the push to be propogated to both B and C, and then we remove
+         the push.
          */
         {
-            std::set<CallInst *>pushes;
+            std::set<CallInst *> pushes;
             for (PushPopPair r : replacements) {
                 pushes.insert(r.first);
-
             }
-            for(CallInst *push : pushes) { push->eraseFromParent(); }
+            for (CallInst *push : pushes) {
+                push->eraseFromParent();
+            }
         }
 
         return llvm::PreservedAnalyses::none();
@@ -127,8 +124,7 @@ public:
         AU.addRequired<DominatorTreeWrapperPass>();
     }
 
-
-private:
+   private:
     std::string stackname;
 
     using InterBlockPushPopPairs = std::set<PushPopPair>;
@@ -137,19 +133,22 @@ private:
     // intra = any set of push/pop that is below the current BB
     // inter = any push/pop that is mix of things below and above the
     // current BB.
-    std::pair<IntraBlockPushPopPairs, InterBlockPushPopPairs> visitBB(BasicBlock &BB, std::stack<CallInst *> pushStack, const DominatorTree &DT, std::set<BasicBlock *> &Visited) {
-
-
+    std::pair<IntraBlockPushPopPairs, InterBlockPushPopPairs> visitBB(
+        BasicBlock &BB, std::stack<CallInst *> pushStack,
+        const DominatorTree &DT, std::set<BasicBlock *> &Visited) {
         IntraBlockPushPopPairs intraBlockPushPopPairs;
         InterBlockPushPopPairs interBlockPushPopPairs;
-        if (Visited.count(&BB)) return std::make_pair(intraBlockPushPopPairs, interBlockPushPopPairs);
+        if (Visited.count(&BB))
+            return std::make_pair(intraBlockPushPopPairs,
+                                  interBlockPushPopPairs);
         Visited.insert(&BB);
 
         std::set<CallInst *> toDelete;
 
-        for(Instruction &I : BB) {
-            // We make _heavy_ assumptions about our IR: that is, that any instruction we don't understand can't hurt us
-            // in particular, that nothing can interfere with push/pop.
+        for (Instruction &I : BB) {
+            // We make _heavy_ assumptions about our IR: that is, that any
+            // instruction we don't understand can't hurt us in particular, that
+            // nothing can interfere with push/pop.
             if (!isa<CallInst>(I)) continue;
 
             CallInst *CI = cast<CallInst>(&I);
@@ -161,27 +160,25 @@ private:
                 pushStack.push(CI);
                 // dbgs() << "pushing: " << *CI << "\n";
 
-            }
-            else if (calleeName == "pop" + stackname) {
-                // We do not have a matching push, our function is incomplete. continue
+            } else if (calleeName == "pop" + stackname) {
+                // We do not have a matching push, our function is incomplete.
+                // continue
                 if (pushStack.size() == 0) continue;
                 CallInst *Push = pushStack.top();
                 pushStack.pop();
 
                 // intra block
-                if(Push->getParent() == CI->getParent()) {
+                if (Push->getParent() == CI->getParent()) {
                     intraBlockPushPopPairs.insert(std::make_pair(Push, CI));
-                }
-                else {
+                } else {
                     interBlockPushPopPairs.insert(std::make_pair(Push, CI));
                 }
             }
         }
 
-
-        // If you are next in the CFG and are dominated in the DT, then you _will_ have the stack state your
-        // parent has. We need both to be satisfied. (Why?)
-        // Consider a CFG:
+        // If you are next in the CFG and are dominated in the DT, then you
+        // _will_ have the stack state your parent has. We need both to be
+        // satisfied. (Why?) Consider a CFG:
         //     A
         //   /   \
         //  B    C
@@ -198,54 +195,52 @@ private:
         // list of push/pop pairs of all children.
         std::vector<InterBlockPushPopPairs> childPpsList;
 
-        for(unsigned i = 0; i < TI->getNumSuccessors(); i++) {
+        for (unsigned i = 0; i < TI->getNumSuccessors(); i++) {
             BasicBlock *Next = TI->getSuccessor(i);
             if (!DT.dominates(&BB, Next)) continue;
 
             IntraBlockPushPopPairs curIntra;
             InterBlockPushPopPairs curInter;
-            std::tie(curIntra, curInter) = visitBB(*Next, pushStack, DT, Visited);
-            // whatever is intra to the child will definitely be intra to the parent.
+            std::tie(curIntra, curInter) =
+                visitBB(*Next, pushStack, DT, Visited);
+            // whatever is intra to the child will definitely be intra to the
+            // parent.
             intraBlockPushPopPairs.insert(curIntra.begin(), curIntra.end());
             childPpsList.push_back(curInter);
         }
 
         // count the number of times a push is matched.
         std::map<CallInst *, unsigned> pushScoreboard;
-        for(InterBlockPushPopPairs pps : childPpsList) {
-            for(PushPopPair pp : pps)
-                pushScoreboard[pp.first]++;
+        for (InterBlockPushPopPairs pps : childPpsList) {
+            for (PushPopPair pp : pps) pushScoreboard[pp.first]++;
         }
 
-
-        for(InterBlockPushPopPairs pps : childPpsList) {
-            for(PushPopPair pp : pps) {
+        for (InterBlockPushPopPairs pps : childPpsList) {
+            for (PushPopPair pp : pps) {
                 assert(pushScoreboard.find(pp.first) != pushScoreboard.end());
                 // all children access this push, then add this
                 if (pushScoreboard[pp.first] == TI->getNumSuccessors()) {
                     if (pp.first->getParent() == &BB) {
                         intraBlockPushPopPairs.insert(pp);
                     } else {
-                    interBlockPushPopPairs.insert(pp);
+                        interBlockPushPopPairs.insert(pp);
                     }
                 }
-
             }
         }
 
-        return std::make_pair(intraBlockPushPopPairs, InterBlockPushPopPairs()); // interBlockPushPopPairs);
-
-
+        return std::make_pair(
+            intraBlockPushPopPairs,
+            InterBlockPushPopPairs());  // interBlockPushPopPairs);
     }
 
-    static void propogatePushToPop (PushPopPair r) {
+    static void propogatePushToPop(PushPopPair r) {
         CallInst *Push = r.first;
         CallInst *Pop = r.second;
         Value *PushedVal = Push->getArgOperand(0);
         BasicBlock::iterator ii(Pop);
         ReplaceInstWithValue(Pop->getParent()->getInstList(), ii, PushedVal);
     }
-
 };
 
 Instruction *getOwningInst(User *U) {
@@ -259,15 +254,114 @@ Instruction *getOwningInst(User *U) {
     report_fatal_error("unreachable code in getOwningInst");
 }
 
-
-
-class EliminateUnusedAllocPass : public PassInfoMixin<EliminateUnusedAllocPass> {
-public:
+// NOTE: this pass is most likely 100% wrong in the presence of loops. Soo.. fix
+// that plz :3
+class SinkPushPass : public PassInfoMixin<SinkPushPass> {
+   public:
+    SinkPushPass(std::string stackname) : stackname(stackname) {}
+    static StringRef name() { return "SinkPush"; }
 
     PreservedAnalyses run(Function &F, FunctionAnalysisManager &FAM) {
-        if (F.isDeclaration()) { return llvm::PreservedAnalyses::all(); }
+        if (F.isDeclaration()) {
+            return llvm::PreservedAnalyses::all();
+        }
+
+        // map from push to pops that accept it.
+        std::map<CallInst *, std::vector<CallInst *>> pushToAcceptingPops;
+    }
+
+    void getAnalysisUsage(AnalysisUsage &AU) const {
+        AU.addRequired<DominatorTreeWrapperPass>();
+    }
+
+   private:
+    const std::string stackname;
+
+    static bool isInstPop(const Instruction *I, const std::string stackname) {
+        const CallInst *CI = dyn_cast<CallInst>(I);
+        if (!CI) return false;
+        if (!CI->getCalledFunction()) return false;
+        return CI->getCalledFunction()->getName() == "pop" + stackname;
+    }
+
+    static bool isInstPush(const Instruction *I, const std::string stackname) {
+        const CallInst *CI = dyn_cast<CallInst>(I);
+        if (!CI) return false;
+        if (!CI->getCalledFunction()) return false;
+        return CI->getCalledFunction()->getName() == "push" + stackname;
+    }
+
+    static void findPushAndMatch(
+        const std::string stackname, BasicBlock *CurBB, BasicBlock::iterator it,
+        std::map<CallInst *, std::vector<CallInst *>> &matchedPops,
+        std::set<BasicBlock *> &Visited) {
+        assert(!Visited.count(CurBB));
+        for (; it != CurBB->end(); ++it) {
+            Instruction *I = &*it;
+            if (!isInstPush(I, stackname)) continue;
+            CallInst *CI = cast<CallInst>(I);
+            // we fond a push
+            getMatchingPops(stackname, CurBB, it, CI, matchedPops, Visited);
+            return;
+        }
+        // no pushes found
+        Visited.insert(CurBB);
+
+        // BB had no pops.
+        const TerminatorInst *TI = CurBB->getTerminator();
+        assert(TI && "BB has no terminator!");
+        for (int i = 0; i < TI->getNumSuccessors(); i++) {
+            BasicBlock *Next = TI->getSuccessor(i);
+            if (Next->getUniquePredecessor() == CurBB) {
+                findPushAndMatch(stackname, Next, Next->begin(), matchedPops, Visited);
+            }
+        }
+    }
+
+    static void getMatchingPops(
+        const std::string stackname, BasicBlock *CurBB, BasicBlock::iterator it,
+        CallInst *push,
+        std::map<CallInst *, std::vector<CallInst *>> &matchedPops,
+        std::set<BasicBlock *> &Visited) {
+        assert(!Visited.count(CurBB));
+        if (Visited.count(CurBB)) return;
+
+        for (; it != CurBB->end(); ++it) {
+            Instruction *I = &*it;
+            if (!isInstPop(I, stackname)) continue;
+            // we found a match.  So now, switch to push-hunting mode.
+            matchedPops[push].push_back(cast<CallInst>(I));
+            findPushAndMatch(stackname, CurBB, it, matchedPops, Visited);
+            return;
+        }
+
+        // we finished the iterator, add us to `visited`.
+        Visited.insert(CurBB);
+
+        // BB had no pops.
+        const TerminatorInst *TI = CurBB->getTerminator();
+        assert(TI && "BB has no terminator!");
+        for (int i = 0; i < TI->getNumSuccessors(); i++) {
+            BasicBlock *Next = TI->getSuccessor(i);
+            if (Next->getUniquePredecessor() == CurBB) {
+                getMatchingPops(stackname, Next, Next->begin(), push,
+                                matchedPops, Visited);
+            }
+        }
+    }
+};
+
+class EliminateUnusedAllocPass
+    : public PassInfoMixin<EliminateUnusedAllocPass> {
+   public:
+    PreservedAnalyses run(Function &F, FunctionAnalysisManager &FAM) {
+        if (F.isDeclaration()) {
+            return llvm::PreservedAnalyses::all();
+        }
         // hack.
-        if (true){ return llvm::PreservedAnalyses::all(); }
+        if (true) {
+            return llvm::PreservedAnalyses::all();
+        }
         AAResults &AA = FAM.getResult<AAManager>(F);
         runInternal(F, AA);
 
@@ -278,64 +372,63 @@ public:
         AU.addRequired<DominatorTreeWrapperPass>();
     }
 
-private:
-
+   private:
     // This instruction uses a pointer. Return if this instruction `I` allows
     // the pointer to escape.
-    static bool isUserThatCreatesEscape(Instruction *I, Value *MaybeEscapingVal) {
+    static bool isUserThatCreatesEscape(Instruction *I,
+                                        Value *MaybeEscapingVal) {
         if (auto CI = dyn_cast<CallInst>(I)) {
-            if (!CI->getCalledFunction())  { report_fatal_error ("indirect function call allows pointer to escape."); }
+            if (!CI->getCalledFunction()) {
+                report_fatal_error(
+                    "indirect function call allows pointer to escape.");
+            }
             if (CI->getName() == "pushReturn") return true;
             return false;
-        }
-        else if (auto SI = dyn_cast<StoreInst>(I)) {
+        } else if (auto SI = dyn_cast<StoreInst>(I)) {
             // store  <val> <maybeescapingval> does NOT escape.
             // store  <maybeescapingval> <escapeloc> DOES escape.
             return SI->getOperand(0) == MaybeEscapingVal;
-        }
-        else if (auto LI = dyn_cast<LoadInst>(I)) {
+        } else if (auto LI = dyn_cast<LoadInst>(I)) {
             return false;
-        }
-        else if (isa<BitCastInst>(I) || isa<GetElementPtrInst>(I)) {
+        } else if (isa<BitCastInst>(I) || isa<GetElementPtrInst>(I)) {
             return doesEscape(I, MaybeEscapingVal);
         }
-        errs() << "unknown instruction pass to " << __PRETTY_FUNCTION__ << ": " << *I << "\n";
+        errs() << "unknown instruction pass to " << __PRETTY_FUNCTION__ << ": "
+               << *I << "\n";
         report_fatal_error("unknown instruction.");
     }
 
     static bool doesEscape(Instruction *I, Value *MaybeEscapingVal) {
-        for(User *U : I->users()) {
+        for (User *U : I->users()) {
             Instruction *User = getOwningInst(U);
             if (isUserThatCreatesEscape(User, MaybeEscapingVal)) return true;
         }
         return false;
     }
 
-    void runInternal(Function &F, AAResults &AA){
+    void runInternal(Function &F, AAResults &AA) {
         errs() << "Eliminate unused alloc running on: " << F.getName() << "\n";
 
-        for(BasicBlock &BB : F) {
-            for(Instruction &I : BB) {
-                if(!isa<CallInst>(I)) continue;
+        for (BasicBlock &BB : F) {
+            for (Instruction &I : BB) {
+                if (!isa<CallInst>(I)) continue;
                 CallInst &CI = cast<CallInst>(I);
                 // we don't analyse indirect calls.
-                if(!CI.getCalledFunction()) continue;
+                if (!CI.getCalledFunction()) continue;
 
-                assert(CI.getCalledFunction() && "should have bailed out by this point at an indirect function");
+                assert(CI.getCalledFunction() &&
+                       "should have bailed out by this point at an indirect "
+                       "function");
                 if (CI.getCalledFunction()->getName() != "alloc") {
                     errs() << "* CallInst Escapes:" << CI << "\n";
                     continue;
                 } else {
-                    errs() << "* CallInst DOES NOT Escape, removing:" << CI << "\n";
+                    errs() << "* CallInst DOES NOT Escape, removing:" << CI
+                           << "\n";
                     CI.replaceAllUsesWith(UndefValue::get(CI.getType()));
                     CI.eraseFromParent();
                 }
-
             }
-
         }
-
     }
-
 };
-
