@@ -184,8 +184,6 @@ class StackMatcherPass : public PassInfoMixin<StackMatcherPass> {
             return std::make_pair(intraBlockPushPopPairs,
                                   interBlockPushPopPairs);
 
-        if (debug) errs() << __PRETTY_FUNCTION__ << BB.getName() << "\n";
-
         Visited.insert(&BB);
 
         std::set<CallInst *> toDelete;
@@ -255,7 +253,8 @@ class StackMatcherPass : public PassInfoMixin<StackMatcherPass> {
 
         for (unsigned i = 0; i < TI->getNumSuccessors(); i++) {
             BasicBlock *Next = TI->getSuccessor(i);
-            if (!DT.dominates(&BB, Next)) continue;
+            bool canForwardState = true;
+            if (!DT.dominates(&BB, Next)) { canForwardState = false; };
             // We need to ensure that the only control flow into this BB must be us.
             // This will disallow cases like this:
             // Entry
@@ -267,16 +266,20 @@ class StackMatcherPass : public PassInfoMixin<StackMatcherPass> {
             //  v    |
             //  B----*
             // Here, Entry `dom` A, but we cannot use Entry's state _into_ A.
-            if (Next->getUniquePredecessor() != &BB) continue;
+            if (Next->getUniquePredecessor() != &BB) { canForwardState = false; }
 
             IntraBlockPushPopPairs curIntra;
             InterBlockPushPopPairs curInter;
+            std::stack<CallInst *>childPushStack = canForwardState ? pushStack : std::stack<CallInst *>();
             std::tie(curIntra, curInter) =
-                visitBB(*Next, pushStack, DT, Visited);
+                visitBB(*Next, childPushStack, DT, Visited);
             // whatever is intra to the child will definitely be intra to the
             // parent.
             intraBlockPushPopPairs.insert(curIntra.begin(), curIntra.end());
-            childPpsList.push_back(curInter);
+
+            // if we can forward our state to the child, then we can trust the inter-BB decisions our child makes.
+            if (canForwardState)
+                childPpsList.push_back(curInter);
         }
 
         // count the number of times a push is matched.
@@ -288,7 +291,7 @@ class StackMatcherPass : public PassInfoMixin<StackMatcherPass> {
         for (InterBlockPushPopPairs pps : childPpsList) {
             for (PushPopPair pp : pps) {
                 assert(pushScoreboard.find(pp.first) != pushScoreboard.end());
-                // all children access this push, then add this
+                // all children access this push, then add this to an intra-block pair.
                 if (pushScoreboard[pp.first] == TI->getNumSuccessors()) {
                     if (pp.first->getParent() == &BB) {
                         intraBlockPushPopPairs.insert(pp);
@@ -305,20 +308,20 @@ class StackMatcherPass : public PassInfoMixin<StackMatcherPass> {
     static void propogatePushToPop(PushPopPair r, DominatorTree &DT) {
         CallInst *Push = r.first;
         CallInst *Pop = r.second;
-        errs() << "---\n";
-        errs() << "propogating push: \n\t" << *Push << "|" << Push->getParent()->getName() << "\n\t" << *Pop << "|" << Pop->getParent()->getName() << "\n";
+        // errs() << "---\n";
+        // errs() << "propogating push: \n\t" << *Push << "|" << Push->getParent()->getName() << "\n\t" << *Pop << "|" << Pop->getParent()->getName() << "\n";
         Value *PushedVal = Push->getArgOperand(0);
 
-        if (Push->getParent() == Pop->getParent()) {
-            errs() << "Intra BB push/pop:\n";
-            Push->getParent()->dump();
-        }
-        else {
-            errs() << "*** INTER BB PUSH/POP***\n";
-            Push->getParent()->getParent()->dump();
-        }
+        // if (Push->getParent() == Pop->getParent()) {
+        //     errs() << "Intra BB push/pop:\n";
+        //     Push->getParent()->dump();
+        // }
+        // else {
+        //     errs() << "*** INTER BB PUSH/POP***\n";
+        //     Push->getParent()->getParent()->dump();
+        // }
         assert(DT.dominates(Push, Pop) && "push must dominate pop to propagate them.");
-        errs() << "---\n";
+        // errs() << "---\n";
 
         BasicBlock::iterator ii(Pop);
         ReplaceInstWithValue(Pop->getParent()->getInstList(), ii, PushedVal);
