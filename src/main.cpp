@@ -180,8 +180,6 @@ static AssertingVH<Function> getOrCreateFunction(Module &m, FunctionType *FTy,
 
 static AssertingVH<Function> createNewFunction(Module &m, FunctionType *FTy,
                                                std::string name) {
-    Function *F = m.getFunction(name);
-    assert(F == nullptr && "function with name already exists");
     return Function::Create(FTy, GlobalValue::ExternalLinkage, name, &m);
 }
 
