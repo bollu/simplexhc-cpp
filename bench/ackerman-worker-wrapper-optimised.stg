@@ -2,9 +2,9 @@
 # CHECK: 7
 #
 # ack :: Int -> Int -> Int
-# ack 0 n = n+1
-# ack m 0 = ack (m - 1) 1
-# ack m n = ack (m - 1) (ack m (n - 1))
+# ack 0 b = b+1
+# ack a 0 = ack (a - 1) 1
+# ack a b = ack (a - 1) (ack a (b - 1))
 
 binding ackerman = \(aint: PrimInt, bint: PrimInt) -> PrimInt {
     case aint () of
@@ -20,6 +20,6 @@ binding ackerman = \(aint: PrimInt, bint: PrimInt) -> PrimInt {
 
 
 binding main = \() -> Boxed { 
-    case ackerman (3 10) of
+    case ackerman (3 11) of
         x -> printInt (x); 
 };
