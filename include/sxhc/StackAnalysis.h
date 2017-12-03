@@ -74,12 +74,17 @@ using StackBB = std::vector<StackInstruction>;
 using StackAnalysis = std::map<llvm::BasicBlock *, StackBB>;
 
 using namespace llvm;
-class StackAnalysisPass : public llvm::AnalysisInfoMixin<StackAnalysisPass> {
+template<const char *stackName>
+// class StackAnalysisPass : public llvm::AnalysisInfoMixin<StackAnalysisPass<stackName>> {
+class StackAnalysisPass : public llvm::PassInfoMixin<StackAnalysisPass<stackName>> {
    public:
-    using Result = StackAnalysis;
+    static AnalysisKey *ID();
+    static llvm::AnalysisKey Key;
 
-    StackAnalysisPass(std::string stackName) : stackName(stackName){};
+    using Result = StackAnalysis;
+    StackAnalysisPass() {};
     static llvm::StringRef name(){ return "StackAnalysis"; };
+
 
     StackAnalysis run(llvm::Function &F, llvm::FunctionAnalysisManager &FAM) {
         StackAnalysis SA;
@@ -90,10 +95,8 @@ class StackAnalysisPass : public llvm::AnalysisInfoMixin<StackAnalysisPass> {
     };
 
    private:
-    friend llvm::AnalysisInfoMixin<StackAnalysisPass>;
-    static llvm::AnalysisKey Key;
+    friend llvm::AnalysisInfoMixin<StackAnalysisPass<stackName>>;
 
-    const std::string stackName;
 
     StackBB makeAnalaysis(llvm::BasicBlock *BB) {
         StackBB stackbb;
@@ -106,12 +109,13 @@ class StackAnalysisPass : public llvm::AnalysisInfoMixin<StackAnalysisPass> {
 
             const std::string funcname = CI->getCalledFunction()->getName();
 
-            if (funcname == "push" + stackName) {
+            if (funcname == std::string("push") + std::string(stackName)) {
                 stackbb.push_back(StackInstruction::createPush(CI));
-            } else if (funcname == "pop" + stackName) {
+            } else if (funcname == std::string("pop") + std::string(stackName)) {
                 stackbb.push_back(StackInstruction::createPop(CI));
             }
         }
         return stackbb;
     }
 };
+

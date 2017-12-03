@@ -34,9 +34,9 @@
 #define DEBUG_TYPE "stackMatcher"
 bool debug = false;
 
-class PushPopMatches {
+class PushPopMatch {
    public:
-    PushPopMatches(StackInstruction pop, StackInstruction push) : pop(pop) {
+    PushPopMatch(StackInstruction push, StackInstruction pop) : pop(pop) {
         assert(pop.isPop());
         insertPush(push);
     };
@@ -67,9 +67,10 @@ class PushPopMatches {
 
 using namespace llvm;
 // Pass to match abstract stack manipulations and eliminate them.
-class StackMatcherPass : public PassInfoMixin<StackMatcherPass> {
+template<const char *stackName>
+class StackMatcherPass : public PassInfoMixin<StackMatcherPass<stackName>> {
    public:
-    explicit StackMatcherPass(StringRef stackname) : stackname(stackname) {}
+    explicit StackMatcherPass() {};
     static StringRef name() { return "StackMatcher"; }
 
     PreservedAnalyses run(Function &F, FunctionAnalysisManager &FAM) {
@@ -77,25 +78,19 @@ class StackMatcherPass : public PassInfoMixin<StackMatcherPass> {
             return llvm::PreservedAnalyses::all();
         }
 
-       StackAnalysis &SA = FAM.getResult<StackAnalysisPass>(F);
-       std::vector<PushPopMatches> matches;
+       StackAnalysis &SA = FAM.getResult<StackAnalysisPass<stackName>>(F);
+       std::vector<PushPopMatch> matches;
 
+       std::vector<PushPopMatch> intraBBMatches = computeIntraBBMatches(SA, F);
+       matches.insert(matches.begin(), intraBBMatches.begin(), intraBBMatches.end());
 
-        // for (PushPopPair r : replacements) {
-        //     StackMatcherPass::propogatePushesToPop(r, DT);
-        // }
+       for(PushPopMatch ppm : matches) {
+           propogatePushesToPop(ppm);
+       }
 
-        /* first propogate then delete because multiple pushes can use the same
-           pop. eg: A - push
-           / \
-           pop- B  C-pop
-
-           We expect the push to be propogated to both B and C, and then we
-           remove the push.
-           */
         {
             std::set<CallInst *> pushes;
-            for (PushPopMatches ppm : matches) {
+            for (PushPopMatch ppm : matches) {
                 for(unsigned i = 0; i < ppm.getNumPushes(); i++) {
                     pushes.insert(ppm.getPush(i).getInstruction());
                 }
@@ -117,7 +112,40 @@ class StackMatcherPass : public PassInfoMixin<StackMatcherPass> {
    private:
     std::string stackname;
 
-    static void propogatePushesToPop(PushPopMatches matches) {
+    static std::vector<PushPopMatch> computeIntraBBMatches(StackAnalysis &SA, Function &F) {
+        std::vector<PushPopMatch> matches;
+        for(BasicBlock &BB : F) {
+            auto it = SA.find(&BB);
+            assert(it != SA.end());
+            // lookup
+            StackBB SBB = it->second;
+            std::stack<StackInstruction> pushes;
+            for (StackInstruction SI : SBB) {
+                if (SI.isPush()) {
+                    pushes.push(SI);
+                    continue;
+                }
+
+                assert(SI.isPop());
+
+                // we have no push to match with, continue.
+                if (pushes.size() == 0) continue;
+
+                // grab the topmost push and use this.
+                StackInstruction push = pushes.top();
+                pushes.pop();
+
+                // add the match.
+                matches.push_back(PushPopMatch(push, SI));
+                
+            }
+
+        }
+
+        return matches;
+    }
+
+    static void propogatePushesToPop(PushPopMatch matches) {
         llvm::CallInst *PopInst = matches.getPop().getInstruction();
 
         // create the PHI node that replaces the pop as a PHI of all the pushes.
@@ -148,9 +176,10 @@ Instruction *getOwningInst(User *U) {
 
 // NOTE: this pass is most likely 100% wrong in the presence of loops. Soo.. fix
 // that plz :3
-class SinkPushPass : public PassInfoMixin<SinkPushPass> {
+template<const char *stackName>
+class SinkPushPass : public PassInfoMixin<SinkPushPass<stackName>> {
    public:
-    SinkPushPass(std::string stackname) : stackname(stackname) {}
+    SinkPushPass() {};
     static StringRef name() { return "SinkPush"; }
 
     PreservedAnalyses run(Function &F, FunctionAnalysisManager &FAM) {
@@ -231,7 +260,7 @@ class SinkPushPass : public PassInfoMixin<SinkPushPass> {
     }
 
     static void getMatchingPops(
-        const std::string stackname, BasicBlock *CurBB, BasicBlock::iterator it,
+        const char *stackname, BasicBlock *CurBB, BasicBlock::iterator it,
         CallInst *push,
         std::map<CallInst *, std::vector<CallInst *>> &matchedPops,
         std::set<BasicBlock *> &Visited) {

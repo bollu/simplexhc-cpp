@@ -2130,6 +2130,33 @@ void hackEliminateUnusedAlloc(Module &m, BuildCtx &bctx, const int OPTION_OPTIMI
 }
 
 
+// HACK: C++ does not allow compile-time string literals without hoop-jumping.
+struct StackNames {
+    static const char ReturnStackName[];
+    static const char IntStackName[];
+};
+
+const char StackNames::ReturnStackName[] = "Return";
+const char StackNames::IntStackName[] = "Int";
+
+
+// HACK: Why do I need this? Why is the declaration in StackAnalysis.cpp not sufficient?
+template<>
+llvm::AnalysisKey StackAnalysisPass<StackNames::ReturnStackName>::Key;
+template<>
+llvm::AnalysisKey StackAnalysisPass<StackNames::IntStackName>::Key;
+
+template<>
+llvm::AnalysisKey *StackAnalysisPass<StackNames::ReturnStackName>::ID() {
+    return &StackAnalysisPass<StackNames::ReturnStackName>::Key;
+}
+
+template<>
+llvm::AnalysisKey *StackAnalysisPass<StackNames::IntStackName>::ID() {
+    return &StackAnalysisPass<StackNames::IntStackName>::Key;
+}
+
+
 int compile_program(stg::Program *program, cxxopts::Options &opts) {
     // ask LLVM to kindly initialize all of its knowledge about targets.
     InitializeAllTargetInfos();
@@ -2203,6 +2230,8 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
     }
 
 
+
+
     {
         PassBuilder PB;
 
@@ -2215,8 +2244,8 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         if (optimisationLevel > PassBuilder::OptimizationLevel::O0) {
             MPM = PB.buildModuleOptimizationPipeline(optimisationLevel);;
             FPM = PB.buildFunctionSimplificationPipeline(optimisationLevel, PassBuilder::ThinLTOPhase::None);
-            FPM.addPass(StackMatcherPass("Return"));
-            FPM.addPass(StackMatcherPass("Int"));
+            FPM.addPass(StackMatcherPass<StackNames::ReturnStackName>());
+            FPM.addPass(StackMatcherPass<StackNames::IntStackName>());
             // FPM.addPass(SinkPushPass("Return"));
         }
 
@@ -2227,6 +2256,8 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
 
         // Register the AA manager first so that our version is the one used.
         FAM.registerPass([&] { return PB.buildDefaultAAPipeline(); });
+        FAM.registerPass([&] { return StackAnalysisPass<StackNames::IntStackName>(); });
+        FAM.registerPass([&] { return StackAnalysisPass<StackNames::ReturnStackName>(); });
 
         PB.registerModuleAnalyses(MAM);
         PB.registerCGSCCAnalyses(CGAM);

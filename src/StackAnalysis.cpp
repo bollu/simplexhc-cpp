@@ -1,3 +1,4 @@
 #include "sxhc/StackAnalysis.h"
 
-llvm::AnalysisKey StackAnalysisPass::Key;
+template<const char *name>
+llvm::AnalysisKey StackAnalysisPass<name>::Key;
