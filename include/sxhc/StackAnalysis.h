@@ -76,10 +76,10 @@ using StackAnalysis = std::map<llvm::BasicBlock *, StackBB>;
 using namespace llvm;
 template<const char *stackName>
 // class StackAnalysisPass : public llvm::AnalysisInfoMixin<StackAnalysisPass<stackName>> {
-class StackAnalysisPass : public llvm::PassInfoMixin<StackAnalysisPass<stackName>> {
+class StackAnalysisPass : public llvm::AnalysisInfoMixin<StackAnalysisPass<stackName>> {
    public:
-    static AnalysisKey *ID();
     static llvm::AnalysisKey Key;
+    // static AnalysisKey *ID() { return &Key; }
 
     using Result = StackAnalysis;
     StackAnalysisPass() {};
@@ -119,3 +119,5 @@ class StackAnalysisPass : public llvm::PassInfoMixin<StackAnalysisPass<stackName
     }
 };
 
+template<const char * name>
+llvm::AnalysisKey StackAnalysisPass<name>::Key;
