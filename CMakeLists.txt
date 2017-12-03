@@ -23,12 +23,13 @@ add_flex_bison_dependency(Lexer Parser)
 
 
 # INCLUDES AND SOURCES
-include_directories(include ${LLVM_INCLUDE_DIRS})
+include_directories(include ${LLVM_INCLUDE_DIRS} include/sxhc)
 
 add_executable(sxhc
     src/main.cpp
     src/RuntimeDebugBuilder.cpp
     src/stgir.cpp
+    src/StackAnalysis.cpp
     lib/libstg.c
     ${BISON_Parser_OUTPUTS}
     ${FLEX_Lexer_OUTPUTS}
