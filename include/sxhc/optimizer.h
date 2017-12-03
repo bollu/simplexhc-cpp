@@ -45,7 +45,7 @@ class PushPopMatch {
 
     void insertPush(StackInstruction push) {
         assert(push.isPush());
-        assert(push.getType() == pop.getType());
+        assert(push.getPushedVal()->getType() == pop.getType());
         pushes.push_back(push);
     }
 
@@ -149,12 +149,14 @@ class StackMatcherPass : public PassInfoMixin<StackMatcherPass<stackName>> {
         llvm::CallInst *PopInst = matches.getPop().getInstruction();
 
         // create the PHI node that replaces the pop as a PHI of all the pushes.
+        errs() << "numPushes: " << matches.getNumPushes() << "\n";
         PHINode *PopReplacement =
             PHINode::Create(matches.getType(), matches.getNumPushes(),
                             PopInst->getName() + ".phi");
         for (unsigned i = 0; i < matches.getNumPushes(); i++) {
             Value *pushValue = matches.getPush(i).getPushedVal();
-            PopReplacement->setIncomingValue(i, pushValue);
+            BasicBlock *pushBB = matches.getPush(i).getInstruction()->getParent();
+            PopReplacement->addIncoming(pushValue, pushBB);
         }
 
         // Replace the pop instruction with the PHI node.
