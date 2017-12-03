@@ -2141,20 +2141,20 @@ const char StackNames::IntStackName[] = "Int";
 
 
 // HACK: Why do I need this? Why is the declaration in StackAnalysis.cpp not sufficient?
-template<>
-llvm::AnalysisKey StackAnalysisPass<StackNames::ReturnStackName>::Key;
-template<>
-llvm::AnalysisKey StackAnalysisPass<StackNames::IntStackName>::Key;
+// template<>
+// llvm::AnalysisKey StackAnalysisPass<StackNames::ReturnStackName>::Key;
+// template<>
+// llvm::AnalysisKey StackAnalysisPass<StackNames::IntStackName>::Key;
 
-template<>
-llvm::AnalysisKey *StackAnalysisPass<StackNames::ReturnStackName>::ID() {
-    return &StackAnalysisPass<StackNames::ReturnStackName>::Key;
-}
-
-template<>
-llvm::AnalysisKey *StackAnalysisPass<StackNames::IntStackName>::ID() {
-    return &StackAnalysisPass<StackNames::IntStackName>::Key;
-}
+//template<>
+//llvm::AnalysisKey *StackAnalysisPass<StackNames::ReturnStackName>::ID() {
+//    return &StackAnalysisPass<StackNames::ReturnStackName>::Key;
+//}
+//
+//template<>
+//llvm::AnalysisKey *StackAnalysisPass<StackNames::IntStackName>::ID() {
+//    return &StackAnalysisPass<StackNames::IntStackName>::Key;
+//}
 
 
 int compile_program(stg::Program *program, cxxopts::Options &opts) {
