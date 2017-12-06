@@ -1,10 +1,8 @@
 #include <iostream>
 #include <set>
 #include <sstream>
-#include "sxhc/RuntimeDebugBuilder.h"
-#include "sxhc/stgir.h"
-#include "sxhc/optimizer.h"
-#include "sxhc/libstg.h"
+#include "cxxopts.hpp"
+#include "jit.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -16,31 +14,34 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/TargetRegistry.h"
+#include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
-#include "llvm/Support/TargetRegistry.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
-#include "llvm/IR/LegacyPassManager.h"
-#include "llvm/Passes/PassBuilder.h"
-#include "llvm/Transforms/Utils/ModuleUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
-#include "jit.h"
-#include "cxxopts.hpp"
-#include "llvm/IR/MDBuilder.h"
-
+#include "llvm/Transforms/Utils/ModuleUtils.h"
+#include "sxhc/RuntimeDebugBuilder.h"
+#include "sxhc/libstg.h"
+#include "sxhc/optimizer.h"
+#include "sxhc/stgir.h"
 
 using namespace llvm;
 
 // The - option defaults to opening STDOUT;
-//cl::opt<std::string> OPTION_OUTPUT_FILENAME("output", cl::desc("Specify output filename"), cl::value_desc("filename"), cl::init("-"));
-//cl::opt<bool> OPTION_DUMP_LLVM("emit-llvm", cl::desc("dump output in LLVM assembly, not as an object file"), cl::value_desc("write llvm to output file"), cl::init(false));
-
+// cl::opt<std::string> OPTION_OUTPUT_FILENAME("output", cl::desc("Specify
+// output filename"), cl::value_desc("filename"), cl::init("-"));  cl::opt<bool>
+// OPTION_DUMP_LLVM("emit-llvm", cl::desc("dump output in LLVM assembly, not as
+// an object file"), cl::value_desc("write llvm to output file"),
+// cl::init(false));
 
 using namespace std;
 using namespace stg;
@@ -72,7 +73,7 @@ class StgDataType : public StgType {
 
    public:
     explicit StgDataType(const DataType *datatype)
-        : StgType(StgType::STK_Data), datatype(datatype) {};
+        : StgType(StgType::STK_Data), datatype(datatype){};
     const DataType *getDataType() const { return datatype; };
 
     std::string getTypeName() const { return datatype->getTypeName(); }
@@ -110,7 +111,6 @@ class StgFunctionType : public StgType {
     }
 };
 
-
 void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
                      BuildCtx &bctx);
 
@@ -131,20 +131,28 @@ void loadFreeVariableFromClosure(Value *closure, Identifier name,
 void materializeEnterDynamicClosure(Value *V, Module &m, StgIRBuilder &builder,
                                     BuildCtx &bctx);
 
-
 // Set AA metadata if the value is an instruction.
 void setValueAAMetadata(Value *V, const AAMDNodes &N) {
-    if (Instruction *I = dyn_cast<Instruction>(V))
-        I->setAAMetadata(N);
-
+    if (Instruction *I = dyn_cast<Instruction>(V)) I->setAAMetadata(N);
 }
 
-struct LLVMClosureData {
-    AssertingVH<Function> fn;
-    AssertingVH<GlobalVariable> closure;
+class LLVMClosureData {
+   public:
+    LLVMClosureData(Function *dynamicCallFn, Function *staticCallFn,
+                    GlobalVariable *closure)
+        : dynamicCallFn(dynamicCallFn),
+          staticCallFn(staticCallFn),
+          closure(closure){};
+    Function *getDynamicCallFn() { return dynamicCallFn; }
 
-    LLVMClosureData(Function *fn, GlobalVariable *closure)
-        : fn(fn), closure(closure){};
+    Function *getStaticCallFn() { return staticCallFn; }
+
+    GlobalVariable *getClosure() { return closure; }
+
+   private:
+    AssertingVH<Function> dynamicCallFn;
+    AssertingVH<Function> staticCallFn;
+    AssertingVH<GlobalVariable> closure;
 };
 
 struct LLVMValueData {
@@ -154,12 +162,16 @@ struct LLVMValueData {
     LLVMValueData(Value *v, const StgType *stgtype) : v(v), stgtype(stgtype) {}
 };
 
-LLVMClosureData materializeEmptyTopLevelStaticBinding(const Binding *b, Module &m,
-                                                 StgIRBuilder &builder,
-                                                 BuildCtx &bctx);
+LLVMClosureData materializeEmptyTopLevelStaticBinding(const Binding *b,
+                                                      Module &m,
+                                                      StgIRBuilder &builder,
+                                                      BuildCtx &bctx);
 
-void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
-                       BuildCtx &bctx);
+void materializeLambdaDynamic(const Lambda *l, Module &m, StgIRBuilder &builder,
+                              BuildCtx &bctx);
+
+void materializeLambdaStatic(const Lambda *l, Function *F, Module &m,
+                             StgIRBuilder builder, BuildCtx &bctx);
 
 LLVMClosureData materializeStaticClosureForFn(Function *F, std::string name,
                                               Module &m, StgIRBuilder &builder,
@@ -185,7 +197,7 @@ static AssertingVH<Function> createNewFunction(Module &m, FunctionType *FTy,
 
 static void createCallTrap(Module &m, StgIRBuilder &builder) {
     Function *trap = getOrCreateFunction(
-            m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
+        m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
     builder.CreateCall(trap);
 }
 
@@ -299,16 +311,20 @@ static const int STACK_SIZE = 1000ull * 1000ull;
 
 class AliasCtx {
     MDNode *caseClosureScopeList;
-    MDNode* caseClosureScopeDomain;
+    MDNode *caseClosureScopeDomain;
     MDNode *caseClosureScope;
     AAMDNodes *caseClosureScopeAAMD;
-public:
+
+   public:
     AliasCtx(Module &m) {
         MDBuilder builder(m.getContext());
-        caseClosureScopeDomain = builder.createAliasScopeDomain("caseClosureScopeDomain");
-        caseClosureScope = builder.createAliasScope("caseClosureScope", caseClosureScopeDomain);
+        caseClosureScopeDomain =
+            builder.createAliasScopeDomain("caseClosureScopeDomain");
+        caseClosureScope = builder.createAliasScope("caseClosureScope",
+                                                    caseClosureScopeDomain);
         caseClosureScopeList = MDTuple::get(m.getContext(), {caseClosureScope});
-        caseClosureScopeAAMD = new AAMDNodes(nullptr, caseClosureScopeList, nullptr);
+        caseClosureScopeAAMD =
+            new AAMDNodes(nullptr, caseClosureScopeList, nullptr);
     }
 
     const AAMDNodes &getCaseClosureScopeAAMD() const {
@@ -359,28 +375,32 @@ class BuildCtx {
     GlobalVariable *llvmNoDebug;
     bool nodebug;
 
-    BuildCtx(Module &m, StgIRBuilder &builder, bool nodebug) : aliasctx(m),  nodebug(nodebug){
+    BuildCtx(Module &m, StgIRBuilder &builder, bool nodebug)
+        : aliasctx(m), nodebug(nodebug) {
+        // errs() << "HACK: setting nodebug to false.\n";
+        // nodebug = false;
 
-        //errs() << "HACK: setting nodebug to false.\n";
-        //nodebug = false;
-
-        llvmNoDebug = new GlobalVariable(m, builder.getInt1Ty(), /*isConstant=*/ true, GlobalValue::ExternalLinkage, builder.getInt1(nodebug), "nodebug");
-
+        llvmNoDebug = new GlobalVariable(
+            m, builder.getInt1Ty(), /*isConstant=*/true,
+            GlobalValue::ExternalLinkage, builder.getInt1(nodebug), "nodebug");
 
         MDBuilder mdbuilder(m.getContext());
-        invariantGroupNode = mdbuilder.createAnonymousAliasScopeDomain("closure_invariant_group");
+        invariantGroupNode = mdbuilder.createAnonymousAliasScopeDomain(
+            "closure_invariant_group");
 
         // *** ContTy ***
-        ContTy = FunctionType::get(builder.getVoidTy(), {builder.getInt8PtrTy()}, false);
+        ContTy = FunctionType::get(builder.getVoidTy(),
+                                   {builder.getInt8PtrTy()}, false);
 
         populateIntrinsicTypes(m, builder, dataTypeMap, dataConstructorMap,
                                primIntTy, boxedTy);
 
         realMalloc = createRealMalloc(m, builder, *this);
-        bumpPointerAlloc = createBumpPointerAllocator(m, builder, *this, realMalloc);
+        bumpPointerAlloc =
+            createBumpPointerAllocator(m, builder, *this, realMalloc);
         // *** Int ***
-        addStack(m, builder, *this, builder.getInt64Ty(), "Int", STACK_SIZE, pushInt,
-                 popInt, stackInt, stackIntTop, llvmNoDebug);
+        addStack(m, builder, *this, builder.getInt64Ty(), "Int", STACK_SIZE,
+                 pushInt, popInt, stackInt, stackIntTop, llvmNoDebug);
 
         pushInt->setCallingConv(CallingConv::Fast);
         popInt->setCallingConv(CallingConv::Fast);
@@ -404,7 +424,8 @@ class BuildCtx {
         // enteringClosureAddr = new GlobalVariable(
         //     m, builder.getInt64Ty(), /*isConstant=*/false,
         //     GlobalValue::ExternalLinkage,
-        //     ConstantInt::get(builder.getInt64Ty(), 0), "enteringClosureAddr");
+        //     ConstantInt::get(builder.getInt64Ty(), 0),
+        //     "enteringClosureAddr");
 
         // ClosureTy
         std::vector<Type *> StructMemberTys;
@@ -424,9 +445,12 @@ class BuildCtx {
         enterDynamicClosure = addEnterDynamicClosureToModule(m, builder, *this);
 
         // *** primMultiply *** //
-        primMultiply = addPrimArithBinopToModule("primMultiply", [](StgIRBuilder builder, Value *a, Value *b) {
-            return builder.CreateMul(a, b);
-        }, m, builder, *this);
+        primMultiply = addPrimArithBinopToModule(
+            "primMultiply",
+            [](StgIRBuilder builder, Value *a, Value *b) {
+                return builder.CreateMul(a, b);
+            },
+            m, builder, *this);
 
         this->insertTopLevelBinding(
             "primMultiply",
@@ -435,36 +459,55 @@ class BuildCtx {
             *primMultiply);
 
         // *** primSubtract *** //
-        LLVMClosureData *primSubtract = addPrimArithBinopToModule("primSubtract", [](StgIRBuilder builder, Value *a, Value *b){
-            return builder.CreateSub(a, b);
-        }, m, builder, *this);
-        this->insertTopLevelBinding("primSubtract", new StgFunctionType(this->primIntTy, {this->primIntTy, this->primIntTy}), *primSubtract);
+        LLVMClosureData *primSubtract = addPrimArithBinopToModule(
+            "primSubtract",
+            [](StgIRBuilder builder, Value *a, Value *b) {
+                return builder.CreateSub(a, b);
+            },
+            m, builder, *this);
+        this->insertTopLevelBinding(
+            "primSubtract",
+            new StgFunctionType(this->primIntTy,
+                                {this->primIntTy, this->primIntTy}),
+            *primSubtract);
         delete primSubtract;
 
-
         // *** primAdd *** //
-        LLVMClosureData *primAdd = addPrimArithBinopToModule("primAdd", [](StgIRBuilder builder, Value *a, Value *b){
-            return builder.CreateAdd(a, b);
-        }, m, builder, *this);
-        this->insertTopLevelBinding("primAdd", new StgFunctionType(this->primIntTy, {this->primIntTy, this->primIntTy}), *primAdd);
+        LLVMClosureData *primAdd = addPrimArithBinopToModule(
+            "primAdd",
+            [](StgIRBuilder builder, Value *a, Value *b) {
+                return builder.CreateAdd(a, b);
+            },
+            m, builder, *this);
+        this->insertTopLevelBinding(
+            "primAdd",
+            new StgFunctionType(this->primIntTy,
+                                {this->primIntTy, this->primIntTy}),
+            *primAdd);
         delete primAdd;
 
         // *** primMult *** //
         //
-        LLVMClosureData *primMult = addPrimArithBinopToModule("primMult", [](StgIRBuilder builder, Value *a, Value *b){
-            return builder.CreateMul(a, b);
-        }, m, builder, *this);
-        this->insertTopLevelBinding("primMult", new StgFunctionType(this->primIntTy, {this->primIntTy, this->primIntTy}), *primMult);
+        LLVMClosureData *primMult = addPrimArithBinopToModule(
+            "primMult",
+            [](StgIRBuilder builder, Value *a, Value *b) {
+                return builder.CreateMul(a, b);
+            },
+            m, builder, *this);
+        this->insertTopLevelBinding(
+            "primMult",
+            new StgFunctionType(this->primIntTy,
+                                {this->primIntTy, this->primIntTy}),
+            *primMult);
         delete primMult;
 
         // *** printInt *** //
         printInt = [&] {
-            Function *F =
-                createNewFunction(m,
-                                  FunctionType::get(builder.getVoidTy(), 
-                                      {builder.getInt8PtrTy()},
-                                      /*isVarArg=*/false),
-                                  "printInt");
+            Function *F = createNewFunction(
+                m,
+                FunctionType::get(builder.getVoidTy(), {builder.getInt8PtrTy()},
+                                  /*isVarArg=*/false),
+                "printInt");
             F->setCallingConv(CallingConv::Fast);
 
             Function *printOnlyInt = getOrCreateFunction(
@@ -493,7 +536,8 @@ class BuildCtx {
             builder.SetInsertPoint(entry);
             LoadInst *returnTop =
                 builder.CreateLoad(this->stackReturnContTop, "nReturnFrames");
-            returnTop->setMetadata(LLVMContext::MD_invariant_group, this->getInvariantGroupNode());
+            returnTop->setMetadata(LLVMContext::MD_invariant_group,
+                                   this->getInvariantGroupNode());
 
             Value *haveReturnFrames = builder.CreateICmpUGT(
                 returnTop, builder.getInt64(1), "haveReturnFrames");
@@ -520,7 +564,6 @@ class BuildCtx {
     void createPushInt(StgIRBuilder &builder, Value *Int) const {
         CallInst *CI = builder.CreateCall(this->pushInt, {Int});
         CI->setCallingConv(CallingConv::Fast);
-
     };
 
     Value *createPopInt(StgIRBuilder &builder, std::string name) const {
@@ -529,36 +572,36 @@ class BuildCtx {
         return CI;
     }
 
-
     void createPushBoxed(StgIRBuilder &builder, Value *Boxed) const {
-        Value *BoxedVoidPtr = builder.CreateBitCast(Boxed, builder.getInt8Ty()->getPointerTo(), Boxed->getName() + ".voidptr");
+        Value *BoxedVoidPtr =
+            builder.CreateBitCast(Boxed, builder.getInt8Ty()->getPointerTo(),
+                                  Boxed->getName() + ".voidptr");
         CallInst *CI = builder.CreateCall(this->pushBoxed, {BoxedVoidPtr});
         CI->setCallingConv(CallingConv::Fast);
-
-
     };
 
-
-    Value *createPopBoxedVoidPtr(StgIRBuilder &builder, std::string name) const {
-        CallInst *CI = builder.CreateCall(this->popBoxed, {}, name + ".voidptr");
+    Value *createPopBoxedVoidPtr(StgIRBuilder &builder,
+                                 std::string name) const {
+        CallInst *CI =
+            builder.CreateCall(this->popBoxed, {}, name + ".voidptr");
         CI->setCallingConv(CallingConv::Fast);
         return CI;
-        //return CI;
+        // return CI;
     }
 
     Value *createPushReturn(StgIRBuilder &builder, Value *Cont) const {
-        Value *voidptr = builder.CreateBitCast(Cont, builder.getInt8Ty()->getPointerTo(), Cont->getName() + ".voidptr");
+        Value *voidptr =
+            builder.CreateBitCast(Cont, builder.getInt8Ty()->getPointerTo(),
+                                  Cont->getName() + ".voidptr");
         CallInst *CI = builder.CreateCall(this->pushReturnCont, {voidptr});
         CI->setCallingConv(CallingConv::Fast);
         return CI;
-
     }
 
     CallInst *createPopReturn(StgIRBuilder &builder, std::string name) const {
         CallInst *CI = builder.CreateCall(this->popReturnCont, {}, name);
         CI->setCallingConv(CallingConv::Fast);
         return CI;
-
     }
 
     // Return the PrimInt type.
@@ -570,7 +613,7 @@ class BuildCtx {
         assert(staticBindingMap.find(name) == staticBindingMap.end());
         staticBindingMap.insert(std::make_pair(name, bdata));
 
-        LLVMValueData vdata(&*bdata.closure, returnTy);
+        LLVMValueData vdata(&*bdata.getClosure(), returnTy);
         identifiermap.insert(name, vdata);
     }
 
@@ -598,7 +641,7 @@ class BuildCtx {
         }
         assert(It != identifiermap.end());
 
-        errs() << "Identifier(" << ident <<") -> " << *It->second.v << "\n";
+        errs() << "Identifier(" << ident << ") -> " << *It->second.v << "\n";
         return It->second;
     }
 
@@ -668,39 +711,33 @@ class BuildCtx {
         report_fatal_error("unknown type name");
     }
 
-    MDNode *getInvariantGroupNode () {
+    MDNode *getInvariantGroupNode() {
         assert(invariantGroupNode);
         return invariantGroupNode;
     }
 
-    Function *getRealMalloc() const {
-        return realMalloc;
-    }
-    
+    Function *getRealMalloc() const { return realMalloc; }
+
     void setRealMalloc(Function *newRealMalloc) {
         assert(newRealMalloc != nullptr);
         assert(this->getRealMalloc()->getNumUses() == 0);
         realMalloc = newRealMalloc;
     }
 
-    Function *getBumpPointerAllocator() const {
-        return bumpPointerAlloc;
+    Function *getBumpPointerAllocator() const { return bumpPointerAlloc; }
 
-    }
-
-    Value *createCallAllocate(StgIRBuilder &builder, uint64_t bytes, std::string name, Type *resultPointerTy) {
-        CallInst *rawmem =
-                builder.CreateCall(this->bumpPointerAlloc,
-                                   {builder.getInt64(bytes)},
-                                   name + ".raw");
+    Value *createCallAllocate(StgIRBuilder &builder, uint64_t bytes,
+                              std::string name, Type *resultPointerTy) {
+        CallInst *rawmem = builder.CreateCall(
+            this->bumpPointerAlloc, {builder.getInt64(bytes)}, name + ".raw");
         rawmem->addAttribute(AttributeList::ReturnIndex,
                              llvm::Attribute::NoAlias);
         rawmem->setCallingConv(CallingConv::Fast);
         assert(rawmem->returnDoesNotAlias());
 
         if (resultPointerTy) {
-            Value *typed = builder.CreateBitCast(
-                    rawmem, resultPointerTy, name + ".typed");
+            Value *typed =
+                builder.CreateBitCast(rawmem, resultPointerTy, name + ".typed");
 
             return typed;
         } else {
@@ -719,15 +756,14 @@ class BuildCtx {
         BuildCtx &bctx;
     };
 
-
-
     // NOTE: this is public because we need this for our hack :]
-    static Function *createRealMalloc(Module &m, StgIRBuilder builder, BuildCtx &bctx) {
+    static Function *createRealMalloc(Module &m, StgIRBuilder builder,
+                                      BuildCtx &bctx) {
         return createNewFunction(
-                m,
-                FunctionType::get(builder.getInt8Ty()->getPointerTo(),
-                                  {builder.getInt64Ty()}, false),
-                "malloc");
+            m,
+            FunctionType::get(builder.getInt8Ty()->getPointerTo(),
+                              {builder.getInt64Ty()}, false),
+            "malloc");
     }
 
    private:
@@ -772,8 +808,8 @@ class BuildCtx {
         typemap["Boxed"] = boxedTy;
     }
 
-    static void addStack(Module &m, StgIRBuilder &builder, BuildCtx &bctx,Type *elemTy,
-                         std::string name, size_t size,
+    static void addStack(Module &m, StgIRBuilder &builder, BuildCtx &bctx,
+                         Type *elemTy, std::string name, size_t size,
                          AssertingVH<Function> &pushFn,
                          AssertingVH<Function> &popFn,
                          AssertingVH<GlobalVariable> &stack,
@@ -803,18 +839,22 @@ class BuildCtx {
             GlobalValue::ExternalLinkage,
             ConstantInt::get(builder.getInt64Ty(), 0), "stack" + name + "Top");
 
-        addPushToModule(m, builder, bctx, size, pushFn, stackTop, stack, llvmNoDebug);
+        addPushToModule(m, builder, bctx, size, pushFn, stackTop, stack,
+                        llvmNoDebug);
         addPopToModule(m, builder, popFn, stackTop, stack, llvmNoDebug);
     }
 
-    static void addPushToModule(Module &m, StgIRBuilder &builder, BuildCtx &bctx, size_t size, Function *F,
-                                Value *stackTop, Value *stack, Value *llvmNoDebug) {
+    static void addPushToModule(Module &m, StgIRBuilder &builder,
+                                BuildCtx &bctx, size_t size, Function *F,
+                                Value *stackTop, Value *stack,
+                                Value *llvmNoDebug) {
         assert(F);
         assert(stackTop);
         assert(stack);
 
         F->addFnAttr(llvm::Attribute::InaccessibleMemOnly);
-        // If the stack is a stack of pointer things, then we should tag the parameter with a readonly.
+        // If the stack is a stack of pointer things, then we should tag the
+        // parameter with a readonly.
         if (stackTop->getType()->getPointerElementType()->isPointerTy())
             F->addParamAttr(0, llvm::Attribute::ReadOnly);
 
@@ -832,7 +872,8 @@ class BuildCtx {
         Value *stackSlot =
             builder.CreateGEP(stack, {builder.getInt64(0), idx}, "slot");
         StoreInst *SI = builder.CreateStore(arg, stackSlot);
-        SI->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
+        SI->setMetadata(LLVMContext::MD_invariant_group,
+                        bctx.getInvariantGroupNode());
 
         Value *idxInc = builder.CreateAdd(idx, builder.getInt64(1), "idx_inc");
         builder.CreateStore(idxInc, stackTop);
@@ -841,26 +882,28 @@ class BuildCtx {
         // failure--
         BasicBlock *failure = BasicBlock::Create(m.getContext(), "failure", F);
         builder.SetInsertPoint(failure);
-        sxhc::RuntimeDebugBuilder::createCPUPrinter(builder, "Ran out of stack: ", F->getName(), "| size:" ,  std::to_string(size), "|cur: ", idx, "\n");
+        sxhc::RuntimeDebugBuilder::createCPUPrinter(
+            builder, "Ran out of stack: ", F->getName(),
+            "| size:", std::to_string(size), "|cur: ", idx, "\n");
         Function *trap = getOrCreateFunction(
-                m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
+            m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
         builder.CreateCall(trap);
         builder.CreateRetVoid();
-
 
         // entry--
         static const int SAFETY = 5;
         builder.SetInsertPoint(entry);
-        Value *isInbounds = builder.CreateICmpULE(idx, builder.getInt64(size - 1 - SAFETY), "is_idx_inbounds");
+        Value *isInbounds = builder.CreateICmpULE(
+            idx, builder.getInt64(size - 1 - SAFETY), "is_idx_inbounds");
         Value *nodebug = builder.CreateLoad(llvmNoDebug, "nodebug");
 
         isInbounds = builder.CreateOr(isInbounds, nodebug, "guard_nodebug");
         builder.CreateCondBr(isInbounds, success, failure);
-
     }
 
     static void addPopToModule(Module &m, StgIRBuilder &builder, Function *F,
-                               Value *stackTop, Value *stack, Value *llvmNoDebug) {
+                               Value *stackTop, Value *stack,
+                               Value *llvmNoDebug) {
         assert(F);
         assert(stackTop);
         assert(stack);
@@ -870,8 +913,10 @@ class BuildCtx {
         builder.SetInsertPoint(entry);
 
         Value *idxPrev = builder.CreateLoad(stackTop, "idx");
-        Value *idxCur = builder.CreateSub(idxPrev, builder.getInt64(1), "idx_dec");
-        Value *isInbounds = builder.CreateICmpSGE(idxCur, builder.getInt64(0), "isGeqZero");
+        Value *idxCur =
+            builder.CreateSub(idxPrev, builder.getInt64(1), "idx_dec");
+        Value *isInbounds =
+            builder.CreateICmpSGE(idxCur, builder.getInt64(0), "isGeqZero");
         Value *nodebug = builder.CreateLoad(llvmNoDebug, "nodebug");
         isInbounds = builder.CreateOr(isInbounds, nodebug, "guard_nodebug");
 
@@ -884,18 +929,20 @@ class BuildCtx {
 
         builder.CreateStore(idxCur, stackTop);
         builder.CreateRet(Ret);
-        
+
         // -- failure
         BasicBlock *failure = BasicBlock::Create(m.getContext(), "failure", F);
         builder.SetInsertPoint(failure);
-        sxhc::RuntimeDebugBuilder::createCPUPrinter(builder, "indexing stack negatively: ", F->getName(), "|cur: ", idxCur, "\n");
+        sxhc::RuntimeDebugBuilder::createCPUPrinter(
+            builder, "indexing stack negatively: ", F->getName(),
+            "|cur: ", idxCur, "\n");
         Function *trap = getOrCreateFunction(
-                m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
+            m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
         trap->addFnAttr(llvm::Attribute::NoReturn);
         CallInst *CI = builder.CreateCall(trap, {});
         CI->setDoesNotReturn();
         builder.CreateUnreachable();
-        //builder.CreateRet(UndefValue::get(stack->getType()->getPointerElementType()->getSequentialElementType()));
+        // builder.CreateRet(UndefValue::get(stack->getType()->getPointerElementType()->getSequentialElementType()));
 
         // entry--
         builder.SetInsertPoint(entry);
@@ -911,7 +958,7 @@ class BuildCtx {
                               /*varargs = */ false),
             "enter_dynamic_closure");
 
-        //F->addFnAttr(Attribute::NoInline);
+        // F->addFnAttr(Attribute::NoInline);
         F->addFnAttr(Attribute::AlwaysInline);
         F->setCallingConv(CallingConv::Fast);
 
@@ -926,7 +973,8 @@ class BuildCtx {
             closureStruct, {builder.getInt64(0), builder.getInt32(0)},
             "cont_slot");
         LoadInst *cont = builder.CreateLoad(contSlot, "cont");
-        cont->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
+        cont->setMetadata(LLVMContext::MD_invariant_group,
+                          bctx.getInvariantGroupNode());
 
         // Value *contAddr = builder.CreatePtrToInt(cont,
         // builder.getInt64Ty(), "cont_addr");
@@ -934,8 +982,10 @@ class BuildCtx {
         // store the address of the closure we are entering
         // Value *closureAddr = builder.CreatePtrToInt(
         //     closureRaw, builder.getInt64Ty(), "closure_addr");
-        // StoreInst *SI = builder.CreateStore(closureAddr, bctx.enteringClosureAddr);
-        // SI->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
+        // StoreInst *SI = builder.CreateStore(closureAddr,
+        // bctx.enteringClosureAddr);
+        // SI->setMetadata(LLVMContext::MD_invariant_group,
+        // bctx.getInvariantGroupNode());
 
         // call the function
         CallInst *CI = builder.CreateCall(cont, {closureRaw});
@@ -945,25 +995,26 @@ class BuildCtx {
         return F;
     }
 
-
-
     // FTy :: StgIRBuilder -> Value* -> Value* -> Value*
-    template<typename FTy>
-    static LLVMClosureData *addPrimArithBinopToModule(std::string name, FTy FResultBuilder, Module &m,
-                                                    StgIRBuilder builder,
-                                                    BuildCtx &bctx) {
-        Function *F =
-            createNewFunction(m,
-                              FunctionType::get(builder.getVoidTy(), {builder.getInt8PtrTy()},
-                                                /*varargs = */ false),
-                              name);
+    template <typename FTy>
+    static LLVMClosureData *addPrimArithBinopToModule(std::string name,
+                                                      FTy FResultBuilder,
+                                                      Module &m,
+                                                      StgIRBuilder builder,
+                                                      BuildCtx &bctx) {
+        Function *F = createNewFunction(
+            m,
+            FunctionType::get(builder.getVoidTy(), {builder.getInt8PtrTy()},
+                              /*varargs = */ false),
+            name);
         F->addFnAttr(llvm::Attribute::AlwaysInline);
         F->setCallingConv(CallingConv::Fast);
         BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
         builder.SetInsertPoint(entry);
         Value *i = bctx.createPopInt(builder, "i");
         Value *j = bctx.createPopInt(builder, "j");
-        Value *result = FResultBuilder(builder, i, j); // builder.CreateMul(i, j, "result");
+        Value *result = FResultBuilder(
+            builder, i, j);  // builder.CreateMul(i, j, "result");
         result->setName("result");
 
         bctx.createPushInt(builder, result);
@@ -976,59 +1027,50 @@ class BuildCtx {
             F, "closure_" + name, m, builder, bctx));
     }
 
-    LLVMClosureData createPrimFunction(
-        Module &m, StgIRBuilder &builder, const BuildCtx &bctx,
-        std::string fnName, StgType *functionType,
-        BuildCtx::StaticBindingMapTy &staticBindingMap,
-        BuildCtx::IdentifierMapTy &identifiermap) {
-        Function *F = createNewFunction(m,
-                                        FunctionType::get(builder.getVoidTy(),
-                                                          /*isVarArg=*/false),
-                                        fnName);
-        LLVMClosureData data(materializeStaticClosureForFn(
-            F, "closure_" + fnName, m, builder, *this));
-        staticBindingMap.insert(std::make_pair(fnName, data));
-        identifiermap.insert(fnName, LLVMValueData(data.closure, functionType));
-        return data;
-    }
+    static Function *createBumpPointerAllocator(Module &m, StgIRBuilder builder,
+                                                BuildCtx &bctx,
+                                                Function *realMalloc) {
+        GlobalVariable *rawHeapMemory = new GlobalVariable(
+            m, builder.getInt8Ty()->getPointerTo(),
+            /*isConstant=*/false, GlobalValue::ExternalLinkage,
+            ConstantPointerNull::get(builder.getInt8Ty()->getPointerTo()),
+            "rawHeapMemory");
 
+        GlobalVariable *heapMemoryTop = new GlobalVariable(
+            m, builder.getInt64Ty(),
+            /*isConstant=*/false, GlobalValue::ExternalLinkage,
+            ConstantInt::get(builder.getInt64Ty(), 0), "rawHeapMemoryTop");
 
-    static Function *createBumpPointerAllocator(Module &m, StgIRBuilder builder, BuildCtx &bctx, Function *realMalloc) {
-
-        GlobalVariable *rawHeapMemory = new GlobalVariable(m, builder.getInt8Ty()->getPointerTo(),
-                /*isConstant=*/false,
-                                                           GlobalValue::ExternalLinkage,
-                                                           ConstantPointerNull::get(builder.getInt8Ty()->getPointerTo()),
-                                                           "rawHeapMemory");
-
-        GlobalVariable *heapMemoryTop = new GlobalVariable(m,
-                                                           builder.getInt64Ty(),
-                /*isConstant=*/false,
-                                                           GlobalValue::ExternalLinkage,
-                                                           ConstantInt::get(builder.getInt64Ty(), 0),
-                                                           "rawHeapMemoryTop");
-
-
-        static const uint64_t HEAP_SIZE = 1ull /*bytes*/ *  1024ull /*kb*/ * 1024ull /*mb*/ * 1024ull /*gn*/ * 1ull * 10ull;
-        std::cout<< "HEAP_SIZE: " << HEAP_SIZE << "\n";
+        static const uint64_t HEAP_SIZE = 1ull /*bytes*/ * 1024ull /*kb*/ *
+                                          1024ull /*mb*/ * 1024ull /*gn*/ *
+                                          1ull * 10ull;
+        std::cout << "HEAP_SIZE: " << HEAP_SIZE << "\n";
         static const uint64_t HEAP_SIZE_SAFETY = HEAP_SIZE - 1000;
-        // static const uint64_t HEAP_SIZE_SAFETY = HEAP_SIZE - 512ull; // 1024 /*kb*/ * 1024 /*mb*/ * 1024 /*gb*/ * 5;
-        std::cout<< "HEAP_SIZE_SAFETY: " << HEAP_SIZE_SAFETY << "\n";
+        // static const uint64_t HEAP_SIZE_SAFETY = HEAP_SIZE - 512ull; // 1024
+        // /*kb*/ * 1024 /*mb*/ * 1024 /*gb*/ * 5;
+        std::cout << "HEAP_SIZE_SAFETY: " << HEAP_SIZE_SAFETY << "\n";
 
         // initialize for the global chunk of memory.
         {
-            
-            Function *memInitializer = createNewFunction(m, FunctionType::get(builder.getVoidTy(), false), "init_rawmem_constructor");
+            Function *memInitializer = createNewFunction(
+                m, FunctionType::get(builder.getVoidTy(), false),
+                "init_rawmem_constructor");
             appendToGlobalCtors(m, memInitializer, 0, rawHeapMemory);
-            BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", memInitializer);
+            BasicBlock *entry =
+                BasicBlock::Create(m.getContext(), "entry", memInitializer);
             builder.SetInsertPoint(entry);
             Value *valueHeapSize = builder.getInt64(HEAP_SIZE);
-            Value *rawmem = builder.CreateCall(realMalloc, {valueHeapSize}, "rawmem");
-            Value *mallocAddr = builder.CreatePtrToInt(rawmem,builder.getInt64Ty(), "malloc_addr");
-            Value *isNull = builder.CreateICmpEQ(mallocAddr, builder.getInt64(0), "is_malloc_nullptr");
+            Value *rawmem =
+                builder.CreateCall(realMalloc, {valueHeapSize}, "rawmem");
+            Value *mallocAddr = builder.CreatePtrToInt(
+                rawmem, builder.getInt64Ty(), "malloc_addr");
+            Value *isNull = builder.CreateICmpEQ(
+                mallocAddr, builder.getInt64(0), "is_malloc_nullptr");
 
-            BasicBlock *Success = BasicBlock::Create(m.getContext(), "success", memInitializer);
-            BasicBlock *Failure = BasicBlock::Create(m.getContext(), "MallocNull", memInitializer);
+            BasicBlock *Success =
+                BasicBlock::Create(m.getContext(), "success", memInitializer);
+            BasicBlock *Failure = BasicBlock::Create(
+                m.getContext(), "MallocNull", memInitializer);
             builder.CreateCondBr(isNull, Failure, Success);
 
             builder.SetInsertPoint(Success);
@@ -1037,28 +1079,29 @@ class BuildCtx {
             builder.CreateRetVoid();
 
             builder.SetInsertPoint(Failure);
-            sxhc::RuntimeDebugBuilder::createCPUPrinter(builder, "malloc returned null for heap size: ", valueHeapSize, "\n");
+            sxhc::RuntimeDebugBuilder::createCPUPrinter(
+                builder, "malloc returned null for heap size: ", valueHeapSize,
+                "\n");
             createCallTrap(m, builder);
             builder.CreateRetVoid();
         }
 
-
-
         {
             Function *alloc = createNewFunction(
-                    m,
-                    FunctionType::get(builder.getInt8Ty()->getPointerTo(),
-                        {builder.getInt64Ty()}, false),
-                    "bumpPointerAllocator");
+                m,
+                FunctionType::get(builder.getInt8Ty()->getPointerTo(),
+                                  {builder.getInt64Ty()}, false),
+                "bumpPointerAllocator");
 
             alloc->addFnAttr(Attribute::NoInline);
             alloc->addFnAttr(Attribute::InaccessibleMemOnly);
             alloc->setCallingConv(CallingConv::Fast);
-            // this is fucked, but in a cool way: GC makes memory allocation pure :)
-            // alloc->addFnAttr(Attribute::ReadNone);
-            // Why does readnone fuck it up?
+            // this is fucked, but in a cool way: GC makes memory allocation
+            // pure :) alloc->addFnAttr(Attribute::ReadNone); Why does readnone
+            // fuck it up?
 
-            BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", alloc);
+            BasicBlock *entry =
+                BasicBlock::Create(m.getContext(), "entry", alloc);
             builder.SetInsertPoint(entry);
 
             Value *prevTop = builder.CreateLoad(heapMemoryTop, "prevTopSlot");
@@ -1071,39 +1114,48 @@ class BuildCtx {
             memSize->setName("size");
 
             // size = floor((size + (ALIGNMENT - 1)) / ALIGNMENT) * ALIGNMENT
-            // Value *sizeAligned = builder.CreateNUWMul(sizeBumped, builder.getInt64(ALIGNMENT), "sizeAligned");
+            // Value *sizeAligned = builder.CreateNUWMul(sizeBumped,
+            // builder.getInt64(ALIGNMENT), "sizeAligned");
             static const int ALIGNMENT = 4;
-            Value *sizeBumped = builder.CreateAdd(memSize, builder.getInt64(ALIGNMENT - 1), "sizeBumped");
-            Value *sizeFloor = builder.CreateUDiv(sizeBumped, builder.getInt64(ALIGNMENT), "sizeFloored");
-            Value *sizeAligned = builder.CreateNUWMul(sizeFloor, builder.getInt64(ALIGNMENT), "sizeAligned");
+            Value *sizeBumped = builder.CreateAdd(
+                memSize, builder.getInt64(ALIGNMENT - 1), "sizeBumped");
+            Value *sizeFloor = builder.CreateUDiv(
+                sizeBumped, builder.getInt64(ALIGNMENT), "sizeFloored");
+            Value *sizeAligned = builder.CreateNUWMul(
+                sizeFloor, builder.getInt64(ALIGNMENT), "sizeAligned");
             Value *newTop = builder.CreateAdd(prevTop, sizeAligned, "newTop");
             builder.CreateStore(newTop, heapMemoryTop);
 
-            Value *outOfMemory = builder.CreateICmpUGT(newTop, builder.getInt64(HEAP_SIZE_SAFETY), "outOfMemory");
+            Value *outOfMemory = builder.CreateICmpUGT(
+                newTop, builder.getInt64(HEAP_SIZE_SAFETY), "outOfMemory");
             Value *nodebug = builder.CreateLoad(bctx.llvmNoDebug, "nodebug");
             Value *isdebug = builder.CreateNot(nodebug, "isdebug");
-            outOfMemory = builder.CreateAnd(outOfMemory, isdebug, "outOfMemoryGuard");
+            outOfMemory =
+                builder.CreateAnd(outOfMemory, isdebug, "outOfMemoryGuard");
 
-            BasicBlock *retBB = BasicBlock::Create(m.getContext(), "ret", alloc);
+            BasicBlock *retBB =
+                BasicBlock::Create(m.getContext(), "ret", alloc);
             builder.SetInsertPoint(retBB);
             builder.CreateRet(mem);
 
-            BasicBlock *trapBB = BasicBlock::Create(m.getContext(), "trap", alloc);
+            BasicBlock *trapBB =
+                BasicBlock::Create(m.getContext(), "trap", alloc);
             builder.SetInsertPoint(trapBB);
-            sxhc::RuntimeDebugBuilder::createCPUPrinter(builder, "blew past heap safety. Total heap size: " + std::to_string(HEAP_SIZE) + "bytes. Safety margin: " + std::to_string(HEAP_SIZE_SAFETY) + "bytes.\n");
+            sxhc::RuntimeDebugBuilder::createCPUPrinter(
+                builder, "blew past heap safety. Total heap size: " +
+                             std::to_string(HEAP_SIZE) +
+                             "bytes. Safety margin: " +
+                             std::to_string(HEAP_SIZE_SAFETY) + "bytes.\n");
             Function *trap = getOrCreateFunction(
-                    m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
+                m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
             builder.CreateCall(trap, {});
             builder.CreateRet(mem);
-
 
             builder.SetInsertPoint(entry);
             builder.CreateCondBr(outOfMemory, trapBB, retBB);
 
             return alloc;
         }
-        
-
     }
 };
 
@@ -1138,13 +1190,13 @@ void materializeEnterDynamicClosure(Value *V, Module &m, StgIRBuilder &builder,
     CallInst *CI = builder.CreateCall(bctx.enterDynamicClosure, {V});
     CI->setTailCallKind(CallInst::TCK_MustTail);
     CI->setCallingConv(llvm::CallingConv::Fast);
- 
 };
 
 // As always, the one who organises things (calls the function) does the
 // work: push params in reverse order.
-void materializeAp(const ExpressionAp *ap, Module &m, StgIRBuilder &builder,
-                   BuildCtx &bctx) {
+void materializeApStaticallyUnknown(const ExpressionAp *ap,
+                                    LLVMValueData fnValueData, Module &m,
+                                    StgIRBuilder &builder, BuildCtx &bctx) {
     for (Atom *p : ap->params_reverse_range()) {
         Value *v = materializeAtom(p, builder, bctx);
         if (isa<AtomInt>(p)) {
@@ -1156,17 +1208,37 @@ void materializeAp(const ExpressionAp *ap, Module &m, StgIRBuilder &builder,
                 bctx.createPushInt(builder, v);
             } else {
                 bctx.createPushBoxed(builder, v);
-                // v = builder.CreateBitCast(v, getRawMemTy(builder));
-                //builder.CreateCall(bctx.pushBoxed, {v});
             }
         }
     }
-    LLVMValueData vdata = bctx.getIdentifier(ap->getFnName());
-    if (vdata.stgtype == bctx.getPrimIntTy()) {
-        materializeEnterInt(vdata.v, ap->getFnName(), m, builder, bctx);
+
+    if (fnValueData.stgtype == bctx.getPrimIntTy()) {
+        materializeEnterInt(fnValueData.v, ap->getFnName(), m, builder, bctx);
     } else {
-        materializeEnterDynamicClosure(vdata.v, m, builder, bctx);
+        materializeEnterDynamicClosure(fnValueData.v, m, builder, bctx);
     };
+};
+
+void materializeApStaticallyKnown(const ExpressionAp *ap,
+                                  LLVMClosureData fnValueData, Module &m,
+                                  StgIRBuilder &builder, BuildCtx &bctx) {
+    std::cerr << "statically known ap: " << *ap << "\n";
+    assert(fnValueData.getStaticCallFn());
+    errs() << "static fn: " << *fnValueData.getStaticCallFn() << "\n";
+    assert(false);
+};
+
+void materializeAp(const ExpressionAp *ap, Module &m, StgIRBuilder &builder,
+                   BuildCtx &bctx) {
+    Optional<LLVMClosureData> staticallyKnownFnData =
+        bctx.getTopLevelBindingFromName(ap->getFnName());
+    if (staticallyKnownFnData && staticallyKnownFnData->getStaticCallFn() != nullptr) {
+        materializeApStaticallyKnown(ap, *staticallyKnownFnData, m, builder,
+                                     bctx);
+    } else {
+        LLVMValueData fnData = bctx.getIdentifier(ap->getFnName());
+        materializeApStaticallyUnknown(ap, fnData, m, builder, bctx);
+    }
 };
 
 void materializeConstructor(const ExpressionConstructor *c, Module &m,
@@ -1180,17 +1252,20 @@ void materializeConstructor(const ExpressionConstructor *c, Module &m,
     const int TotalSize =
         m.getDataLayout().getTypeAllocSize(structType);  // for the tag.
 
-    //Value *rawMem = builder.CreateCall(bctx.malloc,
-    //                                   {builder.getInt64(TotalSize)}, "rawmem");
-    //Value *typedMem =
+    // Value *rawMem = builder.CreateCall(bctx.malloc,
+    //                                   {builder.getInt64(TotalSize)},
+    //                                   "rawmem");
+    // Value *typedMem =
     //    builder.CreateBitCast(rawMem, structType->getPointerTo(), "typedmem");
-    Value *typedMem = bctx.createCallAllocate(builder, TotalSize, "constructor", structType->getPointerTo());
+    Value *typedMem = bctx.createCallAllocate(builder, TotalSize, "constructor",
+                                              structType->getPointerTo());
 
     const int Tag = cons->getParent()->getIndexForConstructor(cons);
     Value *tagIndex = builder.CreateGEP(
         typedMem, {builder.getInt64(0), builder.getInt32(0)}, "tag_index");
     StoreInst *SI = builder.CreateStore(builder.getInt64(Tag), tagIndex);
-     SI->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
+    SI->setMetadata(LLVMContext::MD_invariant_group,
+                    bctx.getInvariantGroupNode());
 
     // Push values into the constructed value
     unsigned i = 1;
@@ -1204,7 +1279,8 @@ void materializeConstructor(const ExpressionConstructor *c, Module &m,
         v->setName("param_" + std::to_string(i));
         v = TransmuteToInt(v, builder);
         StoreInst *SI = builder.CreateStore(v, indexedMem);
-         SI->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
+        SI->setMetadata(LLVMContext::MD_invariant_group,
+                        bctx.getInvariantGroupNode());
         i++;
     }
 
@@ -1254,15 +1330,18 @@ void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
             builder.CreateGEP(StructPtr, Idxs, "slot_int_" + std::to_string(i));
 
         if (bctx.getTypeFromName(cons->getTypeName(i)) == bctx.getPrimIntTy()) {
-            LoadInst *LI = builder.CreateLoad(Slot, "cons_" + std::to_string(i));
-             LI->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
+            LoadInst *LI =
+                builder.CreateLoad(Slot, "cons_" + std::to_string(i));
+            LI->setMetadata(LLVMContext::MD_invariant_group,
+                            bctx.getInvariantGroupNode());
             bctx.insertIdentifier(var, LLVMValueData(LI, bctx.getPrimIntTy()));
         } else {
             LoadInst *LI = builder.CreateLoad(
                 Slot, "cons_mem_as_int_" + std::to_string(i));
-             LI->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
-            Value *V = builder.CreateIntToPtr(LI, getRawMemTy(builder),
-                                       "cons_rawmem_" + std::to_string(i));
+            LI->setMetadata(LLVMContext::MD_invariant_group,
+                            bctx.getInvariantGroupNode());
+            Value *V = builder.CreateIntToPtr(
+                LI, getRawMemTy(builder), "cons_rawmem_" + std::to_string(i));
             const StgType *Ty = bctx.getTypeFromName(cons->getTypeName(i));
             bctx.insertIdentifier(var, LLVMValueData(V, Ty));
         }
@@ -1310,7 +1389,9 @@ Function *materializeCaseConstructorReturnFrame(
     std::stringstream scrutineeNameSS;
     scrutineeNameSS << *c->getScrutinee();
     Function *f = createNewFunction(
-        m, FunctionType::get(builder.getVoidTy(), {builder.getInt8PtrTy()}, /*isVarArg=*/false),
+        m,
+        FunctionType::get(builder.getVoidTy(), {builder.getInt8PtrTy()},
+                          /*isVarArg=*/false),
         "case_alt_" + scrutineeNameSS.str());
     BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", f);
     builder.SetInsertPoint(entry);
@@ -1322,7 +1403,8 @@ Function *materializeCaseConstructorReturnFrame(
     if (freeVarsInAlts.size() > 0) {
         // LoadInst *closureAddr =
         //     builder.CreateLoad(bctx.enteringClosureAddr, "closure_addr_int");
-        //  closureAddr->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
+        //  closureAddr->setMetadata(LLVMContext::MD_invariant_group,
+        //  bctx.getInvariantGroupNode());
         Value *closureRaw = &*f->arg_begin();
         closureRaw->setName("closure_raw");
         Value *closure = builder.CreateBitCast(
@@ -1348,14 +1430,16 @@ Function *materializeCaseConstructorReturnFrame(
         return f;
     }
 
-    Value *rawmem = bctx.createPopBoxedVoidPtr(builder, "rawmem"); // builder.CreateCall(bctx.popBoxed, {}, "rawmem");
+    Value *rawmem = bctx.createPopBoxedVoidPtr(
+        builder, "rawmem");  // builder.CreateCall(bctx.popBoxed, {}, "rawmem");
 
     Value *TagPtr = builder.CreateBitCast(
         rawmem, builder.getInt64Ty()->getPointerTo(), "tagptr");
     // Since we only care about the tag, we can convert to i64 and forget
     // about the rest.
     LoadInst *Tag = builder.CreateLoad(TagPtr, "tag");
-     Tag->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
+    Tag->setMetadata(LLVMContext::MD_invariant_group,
+                     bctx.getInvariantGroupNode());
 
     BasicBlock *failure = BasicBlock::Create(m.getContext(), "failure", f);
     builder.SetInsertPoint(failure);
@@ -1364,7 +1448,7 @@ Function *materializeCaseConstructorReturnFrame(
 
     } else {
         Function *trap = getOrCreateFunction(
-                m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
+            m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
         builder.CreateCall(trap, {});
         builder.CreateRetVoid();
     }
@@ -1433,7 +1517,9 @@ Function *materializePrimitiveCaseReturnFrame(
     namess << "case_" << *c->getScrutinee() << "_alts";
 
     Function *F = createNewFunction(
-        m, FunctionType::get(builder.getVoidTy(), {builder.getInt8PtrTy()}, /*isVarArg=*/false),
+        m,
+        FunctionType::get(builder.getVoidTy(), {builder.getInt8PtrTy()},
+                          /*isVarArg=*/false),
         namess.str());
     BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
     builder.SetInsertPoint(entry);
@@ -1445,7 +1531,8 @@ Function *materializePrimitiveCaseReturnFrame(
     if (freeVarsInAlts.size() > 0) {
         // LoadInst *closureAddr =
         //     builder.CreateLoad(bctx.enteringClosureAddr, "closure_addr_int");
-        //  closureAddr->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
+        //  closureAddr->setMetadata(LLVMContext::MD_invariant_group,
+        //  bctx.getInvariantGroupNode());
         Value *closureRaw = F->arg_begin();
         closureRaw->setName("closure_raw");
 
@@ -1527,10 +1614,9 @@ Function *materializePrimitiveCaseReturnFrame(
 
         if (bctx.nodebug) {
             builder.CreateUnreachable();
-        }
-        else {
+        } else {
             Function *trap = getOrCreateFunction(
-                    m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
+                m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
             builder.CreateCall(trap, {});
             builder.CreateRetVoid();
         }
@@ -1545,11 +1631,9 @@ static const StgType *getTypeOfExpression(const Expression *e,
             const ExpressionAp *ap = cast<ExpressionAp>(e);
             const std::string fnName = ap->getFnName();
             const StgType *CalledTy = bctx.getIdentifier(fnName).stgtype;
-            if (CalledTy == bctx.getPrimIntTy())
-                return bctx.getPrimIntTy();
+            if (CalledTy == bctx.getPrimIntTy()) return bctx.getPrimIntTy();
 
-            const StgFunctionType *Fty =
-                cast<StgFunctionType>(CalledTy);
+            const StgFunctionType *Fty = cast<StgFunctionType>(CalledTy);
             return Fty->getReturnType();
             break;
         }
@@ -1610,9 +1694,9 @@ std::set<Identifier> getFreeVarsInExpression(
                 bindingNames.insert(b->getName());
             }
 
-            for(const Binding *b : let->bindings_range()) {
+            for (const Binding *b : let->bindings_range()) {
                 const Lambda *l = b->getRhs();
-                for(const Parameter *p : l->free_params_range()) {
+                for (const Parameter *p : l->free_params_range()) {
                     lambdaFree.insert(p->getName());
                 }
             }
@@ -1697,7 +1781,6 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
         return vecids;
     }();
 
-
     const Expression *scrutinee = c->getScrutinee();
     const StgType *scrutineety = getTypeOfExpression(scrutinee, bctx);
 
@@ -1714,27 +1797,30 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
     continuation->setCallingConv(CallingConv::Fast);
 
     Type *closureTy = bctx.ClosureTy[freeVarsInAlts.size()];
-    Value *clsTyped = bctx.createCallAllocate(builder, m.getDataLayout().getTypeAllocSize(closureTy), "closure", closureTy->getPointerTo());
+    Value *clsTyped = bctx.createCallAllocate(
+        builder, m.getDataLayout().getTypeAllocSize(closureTy), "closure",
+        closureTy->getPointerTo());
 
-    //CallInst *clsRaw =
+    // CallInst *clsRaw =
     //    builder.CreateCall(bctx.malloc,
     //                       {builder.getInt64(m.getDataLayout().getTypeAllocSize(
     //                           bctx.ClosureTy[freeVarsInAlts.size()]))},
     //                       "closure_raw");
-    //clsRaw->addAttribute(AttributeList::ReturnIndex, llvm::Attribute::NoAlias);
-    //assert(clsRaw->returnDoesNotAlias());
+    // clsRaw->addAttribute(AttributeList::ReturnIndex,
+    // llvm::Attribute::NoAlias);  assert(clsRaw->returnDoesNotAlias());
 
-    //Value *clsTyped = builder.CreateBitCast(
+    // Value *clsTyped = builder.CreateBitCast(
     //    clsRaw, bctx.ClosureTy[freeVarsInAlts.size()]->getPointerTo(),
     //    "closure_typed");
     Value *fnSlot = builder.CreateGEP(
         clsTyped, {builder.getInt64(0), builder.getInt32(0)}, "fn_slot");
     StoreInst *SI = builder.CreateStore(continuation, fnSlot);
 
-    //MDBuilder mdbuilder(m.getContext());
-    //MDNode *invariantGroup = mdbuilder.createAnonymousAliasScopeDomain("closure_invariant_group");
-    SI->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
-
+    // MDBuilder mdbuilder(m.getContext());
+    // MDNode *invariantGroup =
+    // mdbuilder.createAnonymousAliasScopeDomain("closure_invariant_group");
+    SI->setMetadata(LLVMContext::MD_invariant_group,
+                    bctx.getInvariantGroupNode());
 
     // store free vars into the slot.
     int i = 0;
@@ -1746,8 +1832,9 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
         Value *freeVarVal = bctx.getIdentifier(freeVar).v;
         freeVarVal = TransmuteToInt(freeVarVal, builder);
         StoreInst *SI = builder.CreateStore(freeVarVal, freeVarSlot);
-//        SI->setAAMetadata(bctx.aliasctx.getCaseClosureScopeAAMD());
-         SI->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
+        //        SI->setAAMetadata(bctx.aliasctx.getCaseClosureScopeAAMD());
+        SI->setMetadata(LLVMContext::MD_invariant_group,
+                        bctx.getInvariantGroupNode());
         i++;
     }
 
@@ -1798,7 +1885,8 @@ Value *_allocateLetBindingDynamicClosure(const Binding *b, BasicBlock *BB,
 
     const uint64_t sizeInBytes = m.getDataLayout().getTypeAllocSize(closureTy);
     // no store to function slot, args. These come later.
-    return bctx.createCallAllocate(builder, sizeInBytes, "let.dynamic.closure", closureTy->getPointerTo());
+    return bctx.createCallAllocate(builder, sizeInBytes, "let.dynamic.closure",
+                                   closureTy->getPointerTo());
 }
 
 // Load free parameters from the closure `closure`, with free parameters
@@ -1816,7 +1904,8 @@ void loadFreeVariableFromClosure(Value *closure, Identifier name,
         "free__" + name + "__ty_" + ty->getTypeName());
 
     LoadInst *LI = builder.CreateLoad(v, name);
-     LI->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
+    LI->setMetadata(LLVMContext::MD_invariant_group,
+                    bctx.getInvariantGroupNode());
     v = LI;
     if (ty != bctx.getPrimIntTy()) {
         v = builder.CreateIntToPtr(v, getRawMemTy(builder), name + "_rawmem");
@@ -1831,8 +1920,8 @@ void loadFreeVariableFromClosure(Value *closure, Identifier name,
 // closure. Consider mergining with materializeEmptyTopLevelStaticBinding
 Function *_materializeDynamicLetBinding(const Binding *b, Module &m,
                                         StgIRBuilder builder, BuildCtx &bctx) {
-    FunctionType *FTy =
-        FunctionType::get(builder.getVoidTy(), {builder.getInt8PtrTy()}, /*isVarArg=*/false);
+    FunctionType *FTy = FunctionType::get(
+        builder.getVoidTy(), {builder.getInt8PtrTy()}, /*isVarArg=*/false);
     Function *F =
         Function::Create(FTy, GlobalValue::ExternalLinkage, b->getName(), &m);
 
@@ -1844,10 +1933,14 @@ Function *_materializeDynamicLetBinding(const Binding *b, Module &m,
 
     // LoadInst *closureAddr =
     //     builder.CreateLoad(bctx.enteringClosureAddr, "closure_addr_int");
-    //  closureAddr->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
+    //  closureAddr->setMetadata(LLVMContext::MD_invariant_group,
+    //  bctx.getInvariantGroupNode());
     Argument *closureRaw = &*F->arg_begin();
     closureRaw->setName("closure_raw");
-    Value *closure = builder.CreateBitCast(closureRaw, bctx.ClosureTy[b->getRhs()->free_params_size()]->getPointerTo(), "closure_typed");
+    Value *closure = builder.CreateBitCast(
+        closureRaw,
+        bctx.ClosureTy[b->getRhs()->free_params_size()]->getPointerTo(),
+        "closure_typed");
 
     // Value *closure = builder.CreateIntToPtr(
     //     closureAddr,
@@ -1862,7 +1955,7 @@ Function *_materializeDynamicLetBinding(const Binding *b, Module &m,
                                     entry, bctx);
         i++;
     }
-    materializeLambda(b->getRhs(), m, builder, bctx);
+    materializeLambdaDynamic(b->getRhs(), m, builder, bctx);
     builder.CreateRetVoid();
     return F;
 }
@@ -1907,10 +2000,8 @@ void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
             builder.CreateGEP(cls, {builder.getInt64(0), builder.getInt32(0)},
                               b->getName() + "_fn_slot");
         StoreInst *SI = builder.CreateStore(f, fnSlot);
-         SI->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
-
-
-
+        SI->setMetadata(LLVMContext::MD_invariant_group,
+                        bctx.getInvariantGroupNode());
 
         int i = 0;
         for (Parameter *p : b->getRhs()->free_params_range()) {
@@ -1921,7 +2012,8 @@ void materializeLet(const ExpressionLet *l, Module &m, StgIRBuilder &builder,
             Value *v = bctx.getIdentifier(p->getName()).v;
             v = TransmuteToInt(v, builder);
             StoreInst *SI = builder.CreateStore(v, freeParamSlot);
-             SI->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
+            SI->setMetadata(LLVMContext::MD_invariant_group,
+                            bctx.getInvariantGroupNode());
             i++;
         }
     }
@@ -1970,13 +2062,21 @@ void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
     };
 }
 
-void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
-                       BuildCtx &bctx) {
+void materializeLambdaStatic(const Lambda *l, Function *F, Module &m,
+                             StgIRBuilder builder, BuildCtx &bctx) {
+    assert(F);
+    assert(!F->isDeclaration());
+    builder.SetInsertPoint(&F->getEntryBlock());
+    createCallTrap(m, builder);
+    builder.CreateRetVoid();
+}
 
+void materializeLambdaDynamic(const Lambda *l, Module &m, StgIRBuilder &builder,
+                              BuildCtx &bctx) {
     Function *F = builder.GetInsertBlock()->getParent();
     assert(F);
     F->dump();
-    
+
     BuildCtx::Scoper scoper(bctx);
     for (const Parameter *p : l->bound_params_range()) {
         const StgType *Ty = bctx.getTypeFromRawType(p->getTypeRaw());
@@ -1985,15 +2085,15 @@ void materializeLambda(const Lambda *l, Module &m, StgIRBuilder &builder,
             bctx.insertIdentifier(p->getName(),
                                   LLVMValueData(pv, bctx.getPrimIntTy()));
         } else {
-            //Value *pv =
-            //    builder.CreateCall(bctx.popBoxed, {}, "param_" + p->getName());
-            Value *pv = 
+            // Value *pv =
+            //    builder.CreateCall(bctx.popBoxed, {}, "param_" +
+            //    p->getName());
+            Value *pv =
                 bctx.createPopBoxedVoidPtr(builder, "param_" + p->getName());
             bctx.insertIdentifier(p->getName(), LLVMValueData(pv, Ty));
         }
     }
     materializeExpr(l->getRhs(), m, builder, bctx);
-    
 }
 
 // Create a static closure for a top-level function. That way, we don't need
@@ -2011,18 +2111,18 @@ LLVMClosureData materializeStaticClosureForFn(Function *F, std::string name,
     GlobalVariable *closure =
         new GlobalVariable(m, closureTy, /*isconstant=*/true,
                            GlobalValue::ExternalLinkage, initializer, name);
-    return LLVMClosureData(F, closure);
+    return LLVMClosureData(F, nullptr, closure);
 }
 
-
 // Create a top-level static binding from a "binding" that is parsed in STG.
-LLVMClosureData materializeEmptyTopLevelStaticBinding(const Binding *b, Module &m,
-                                                 StgIRBuilder &builder,
-                                                 BuildCtx &bctx) {
+LLVMClosureData materializeEmptyTopLevelStaticBinding(const Binding *b,
+                                                      Module &m,
+                                                      StgIRBuilder &builder,
+                                                      BuildCtx &bctx) {
     assert(b->getRhs()->free_params_size() == 0 &&
            "top level bindings cannot have any free paramters.");
-    FunctionType *FTy =
-        FunctionType::get(builder.getVoidTy(), {builder.getInt8PtrTy()}, /*isVarArg=*/false);
+    FunctionType *FTy = FunctionType::get(
+        builder.getVoidTy(), {builder.getInt8PtrTy()}, /*isVarArg=*/false);
     Function *F =
         Function::Create(FTy, GlobalValue::ExternalLinkage, b->getName(), &m);
     F->addFnAttr(llvm::Attribute::AlwaysInline);
@@ -2054,8 +2154,8 @@ StructType *materializeDataConstructor(const DataType *decl,
     return Ty;
 };
 
-void hackEliminateUnusedAlloc(Module &m, BuildCtx &bctx, const int OPTION_OPTIMISATION_LEVEL) {
-
+void hackEliminateUnusedAlloc(Module &m, BuildCtx &bctx,
+                              const int OPTION_OPTIMISATION_LEVEL) {
     Function *bumpPointer = bctx.getBumpPointerAllocator();
     Function *realMalloc = bctx.getRealMalloc();
 
@@ -2067,30 +2167,34 @@ void hackEliminateUnusedAlloc(Module &m, BuildCtx &bctx, const int OPTION_OPTIMI
     StgIRBuilder builder(m.getContext());
 
     assert(m.getFunction("malloc") == nullptr && "malloc still around!");
-    Function *fakeMalloc = cast<Function>(m.getOrInsertFunction("malloc", FunctionType::get(builder.getInt8PtrTy(0), {builder.getInt64Ty()}, false)));
+    Function *fakeMalloc = cast<Function>(m.getOrInsertFunction(
+        "malloc", FunctionType::get(builder.getInt8PtrTy(0),
+                                    {builder.getInt64Ty()}, false)));
     fakeMalloc->addFnAttr(llvm::Attribute::InaccessibleMemOnly);
     fakeMalloc->addFnAttr(llvm::Attribute::NoRecurse);
     fakeMalloc->addFnAttr(llvm::Attribute::NoUnwind);
 
-    assert(bumpPointer->getType() == fakeMalloc->getType() && "different types!");
+    assert(bumpPointer->getType() == fakeMalloc->getType() &&
+           "different types!");
     bumpPointer->replaceAllUsesWith(fakeMalloc);
 
     {
-
         PassBuilder PB;
 
         ModulePassManager MPM;
         FunctionPassManager FPM;
         CGSCCPassManager CGSCCPM;
 
-        PassBuilder::OptimizationLevel optimisationLevel = static_cast<PassBuilder::OptimizationLevel>(
-                (unsigned) PassBuilder::OptimizationLevel::O0 +
+        PassBuilder::OptimizationLevel optimisationLevel =
+            static_cast<PassBuilder::OptimizationLevel>(
+                (unsigned)PassBuilder::OptimizationLevel::O0 +
                 OPTION_OPTIMISATION_LEVEL);
 
         if (optimisationLevel > 0) {
-            MPM = PB.buildModuleOptimizationPipeline(optimisationLevel);;
-            FPM = PB.buildFunctionSimplificationPipeline(optimisationLevel,
-                                                         PassBuilder::ThinLTOPhase::None);
+            MPM = PB.buildModuleOptimizationPipeline(optimisationLevel);
+            ;
+            FPM = PB.buildFunctionSimplificationPipeline(
+                optimisationLevel, PassBuilder::ThinLTOPhase::None);
         }
 
         LoopAnalysisManager LAM;
@@ -2109,26 +2213,26 @@ void hackEliminateUnusedAlloc(Module &m, BuildCtx &bctx, const int OPTION_OPTIMI
 
         // Fix the IR first, then run optimisations.
         MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
-        MPM.addPass(createModuleToPostOrderCGSCCPassAdaptor(std::move(CGSCCPM)));
+        MPM.addPass(
+            createModuleToPostOrderCGSCCPassAdaptor(std::move(CGSCCPM)));
 
-        // We need to run the pipeline once for correctness. Anything after that is optimisation.
+        // We need to run the pipeline once for correctness. Anything after that
+        // is optimisation.
         MPM.run(m, MAM);
     }
 
     if ((fakeMalloc = m.getFunction("malloc"))) {
         assert(fakeMalloc != nullptr && "unable to find malloc.");
-        assert(bumpPointer->getType() == fakeMalloc->getType() && "different types!");
+        assert(bumpPointer->getType() == fakeMalloc->getType() &&
+               "different types!");
         fakeMalloc->replaceAllUsesWith(bumpPointer);
         fakeMalloc->eraseFromParent();
-    }
-    else {
-
+    } else {
     }
 
     bumpPointer->setName(bumpPointerName);
     realMalloc->setName("malloc");
 }
-
 
 // HACK: C++ does not allow compile-time string literals without hoop-jumping.
 struct StackNames {
@@ -2139,23 +2243,20 @@ struct StackNames {
 const char StackNames::ReturnStackName[] = "Return";
 const char StackNames::IntStackName[] = "Int";
 
-
-// HACK: Why do I need this? Why is the declaration in StackAnalysis.cpp not sufficient?
-// template<>
-// llvm::AnalysisKey StackAnalysisPass<StackNames::ReturnStackName>::Key;
-// template<>
+// HACK: Why do I need this? Why is the declaration in StackAnalysis.cpp not
+// sufficient? template<> llvm::AnalysisKey
+// StackAnalysisPass<StackNames::ReturnStackName>::Key; template<>
 // llvm::AnalysisKey StackAnalysisPass<StackNames::IntStackName>::Key;
 
-//template<>
-//llvm::AnalysisKey *StackAnalysisPass<StackNames::ReturnStackName>::ID() {
+// template<>
+// llvm::AnalysisKey *StackAnalysisPass<StackNames::ReturnStackName>::ID() {
 //    return &StackAnalysisPass<StackNames::ReturnStackName>::Key;
 //}
 //
-//template<>
-//llvm::AnalysisKey *StackAnalysisPass<StackNames::IntStackName>::ID() {
+// template<>
+// llvm::AnalysisKey *StackAnalysisPass<StackNames::IntStackName>::ID() {
 //    return &StackAnalysisPass<StackNames::IntStackName>::Key;
 //}
-
 
 int compile_program(stg::Program *program, cxxopts::Options &opts) {
     // ask LLVM to kindly initialize all of its knowledge about targets.
@@ -2170,13 +2271,15 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
     const bool OPTION_JIT = opts.count("jit") > 0;
     const int OPTION_OPTIMISATION_LEVEL = [&opts] {
         if (!opts.count("O")) return 0;
-        int opt =  opts["O"].as<int>();
+        int opt = opts["O"].as<int>();
         assert(opt >= 0 && "-O levels can only be -O{0, 1, 2, 3}");
         assert(opt <= 3 && "-O levels can only be -O{0, 1, 2, 3}");
         return opt;
     }();
 
-    const TargetMachine::CodeGenFileType  OPTION_CODEGEN_FILE_TYPE = opts.count("emit-asm") ? TargetMachine::CGFT_AssemblyFile : TargetMachine::CGFT_ObjectFile;
+    const TargetMachine::CodeGenFileType OPTION_CODEGEN_FILE_TYPE =
+        opts.count("emit-asm") ? TargetMachine::CGFT_AssemblyFile
+                               : TargetMachine::CGFT_ObjectFile;
 
     static LLVMContext ctx;
     static StgIRBuilder builder(ctx);
@@ -2187,9 +2290,10 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
     cerr << "Source program: ";
     cerr << *program << "\n";
     cerr << "----\n";
-    //return 0;
+    // return 0;
 
-    BuildCtx *bctxPtr = new BuildCtx(*m, builder, /*nodebug=*/ OPTION_OPTIMISATION_LEVEL > 0);
+    BuildCtx *bctxPtr =
+        new BuildCtx(*m, builder, /*nodebug=*/OPTION_OPTIMISATION_LEVEL > 0);
     BuildCtx &bctx = *bctxPtr;
     Binding *entrystg = nullptr;
     for (DataType *datatype : program->datatypes_range()) {
@@ -2197,40 +2301,45 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         bctx.insertType(datatype->getTypeName(), new StgDataType(datatype));
         for (DataConstructor *cons : datatype->constructors_range()) {
             bctx.insertDataConstructor(
-                    cons->getName(), cons,
-                    materializeDataConstructor(datatype, cons, *m, builder,
-                                               bctx));
+                cons->getName(), cons,
+                materializeDataConstructor(datatype, cons, *m, builder, bctx));
         }
     }
-
 
     // First, create empty top level bindings and insert them.
     // This is so that when we codegen the bindings, we can have recusion,
     // mututal recursion, and all that fun stuff.
-    std::map<Binding *,  LLVMClosureData>bindingToClosure;
+    std::map<Binding *, LLVMClosureData> bindingToClosure;
     for (Binding *b : program->bindings_range()) {
         if (b->getName() == "main") {
             assert(!entrystg && "program has more than one main.");
             entrystg = b;
         }
-        const LLVMClosureData cls =  materializeEmptyTopLevelStaticBinding(b, *m, builder, bctx);
+        const LLVMClosureData cls =
+            materializeEmptyTopLevelStaticBinding(b, *m, builder, bctx);
         bindingToClosure.insert(std::make_pair(b, cls));
 
         bctx.insertTopLevelBinding(
-                b->getName(), createStgTypeForLambda(b->getRhs(), bctx), cls);
+            b->getName(), createStgTypeForLambda(b->getRhs(), bctx), cls);
     }
 
-    for(auto It: bindingToClosure) {
-        Function *F = It.second.fn;
+    for (auto It : bindingToClosure) {
+        Function *F = It.second.getDynamicCallFn();
         const Binding *b = It.first;
         BasicBlock *entry = BasicBlock::Create(m->getContext(), "entry", F);
         builder.SetInsertPoint(entry);
-        materializeLambda(b->getRhs(), *m, builder, bctx);
+        materializeLambdaDynamic(b->getRhs(), *m, builder, bctx);
         builder.CreateRetVoid();
     }
 
-
-
+    // for (auto It : bindingToClosure) {
+    //     Function *F = It.second.getStaticCallFn();
+    //     const Binding *b = It.first;
+    //     BasicBlock *entry = BasicBlock::Create(m->getContext(), "entry", F);
+    //     builder.SetInsertPoint(entry);
+    //     materializeLambdaStatic(b->getRhs(), F, *m, builder, bctx);
+    //     builder.CreateRetVoid();
+    // }
 
     {
         PassBuilder PB;
@@ -2239,11 +2348,16 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         FunctionPassManager FPM;
         CGSCCPassManager CGSCCPM;
 
-        PassBuilder::OptimizationLevel optimisationLevel = static_cast<PassBuilder::OptimizationLevel>((unsigned)PassBuilder::OptimizationLevel::O0 + OPTION_OPTIMISATION_LEVEL);
+        PassBuilder::OptimizationLevel optimisationLevel =
+            static_cast<PassBuilder::OptimizationLevel>(
+                (unsigned)PassBuilder::OptimizationLevel::O0 +
+                OPTION_OPTIMISATION_LEVEL);
 
         if (optimisationLevel > PassBuilder::OptimizationLevel::O0) {
-            MPM = PB.buildModuleOptimizationPipeline(optimisationLevel);;
-            FPM = PB.buildFunctionSimplificationPipeline(optimisationLevel, PassBuilder::ThinLTOPhase::None);
+            MPM = PB.buildModuleOptimizationPipeline(optimisationLevel);
+            ;
+            FPM = PB.buildFunctionSimplificationPipeline(
+                optimisationLevel, PassBuilder::ThinLTOPhase::None);
             FPM.addPass(StackMatcherPass<StackNames::ReturnStackName>());
             FPM.addPass(StackMatcherPass<StackNames::IntStackName>());
             // FPM.addPass(SinkPushPass("Return"));
@@ -2256,8 +2370,10 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
 
         // Register the AA manager first so that our version is the one used.
         FAM.registerPass([&] { return PB.buildDefaultAAPipeline(); });
-        FAM.registerPass([&] { return StackAnalysisPass<StackNames::IntStackName>(); });
-        FAM.registerPass([&] { return StackAnalysisPass<StackNames::ReturnStackName>(); });
+        FAM.registerPass(
+            [&] { return StackAnalysisPass<StackNames::IntStackName>(); });
+        FAM.registerPass(
+            [&] { return StackAnalysisPass<StackNames::ReturnStackName>(); });
 
         PB.registerModuleAnalyses(MAM);
         PB.registerCGSCCAnalyses(CGAM);
@@ -2265,11 +2381,11 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         PB.registerLoopAnalyses(LAM);
         PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
 
-
         // Fix the IR first, then run optimisations.
         MPM.addPass(AlwaysInlinerPass());
         MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
-        MPM.addPass(createModuleToPostOrderCGSCCPassAdaptor(std::move(CGSCCPM)));
+        MPM.addPass(
+            createModuleToPostOrderCGSCCPassAdaptor(std::move(CGSCCPM)));
 
         for (Function &F : *m) {
             if (&F == bctx.getBumpPointerAllocator()) continue;
@@ -2299,26 +2415,28 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         exit(1);
     }
 
-
     std::error_code errcode;
     llvm::raw_fd_ostream outputFile(OPTION_OUTPUT_FILENAME, errcode,
                                     llvm::sys::fs::F_None);
 
     if (errcode) {
-        std::cerr << "Unable to open output file: " << OPTION_OUTPUT_FILENAME << "\n";
+        std::cerr << "Unable to open output file: " << OPTION_OUTPUT_FILENAME
+                  << "\n";
         std::cerr << "Error: " << errcode.message() << "\n";
         exit(1);
     }
 
     if (OPTION_DUMP_LLVM) {
         m->print(outputFile, nullptr);
-    }
-    else {
-        if (OPTION_OUTPUT_FILENAME == "-" && OPTION_CODEGEN_FILE_TYPE == TargetMachine::CGFT_ObjectFile){
-            errs() << "WARNING: trying to print an object file to stdout, this will be ugly. skipping because this is pointless for now.\n";
-            errs() << "To print LLVM IR, use --emit-llvm. To print assembly, use --emit-asm\n";
-        }
-        else {
+    } else {
+        if (OPTION_OUTPUT_FILENAME == "-" &&
+            OPTION_CODEGEN_FILE_TYPE == TargetMachine::CGFT_ObjectFile) {
+            errs() << "WARNING: trying to print an object file to stdout, this "
+                      "will be ugly. skipping because this is pointless for "
+                      "now.\n";
+            errs() << "To print LLVM IR, use --emit-llvm. To print assembly, "
+                      "use --emit-asm\n";
+        } else {
             const std::string CPU = "generic";
             auto TargetTriple = sys::getDefaultTargetTriple();
             std::string Error;
@@ -2328,48 +2446,50 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
                 report_fatal_error("unable to lookup target");
             }
 
-
             TargetOptions opt;
             auto RM = Optional<Reloc::Model>();
             const std::string Features = "";
-            llvm::TargetMachine *TM = Target->createTargetMachine(TargetTriple,
-                                                                  CPU, Features,
-                                                                  opt, RM);
+            llvm::TargetMachine *TM = Target->createTargetMachine(
+                TargetTriple, CPU, Features, opt, RM);
             m->setDataLayout(TM->createDataLayout());
 
             legacy::PassManager PM;
-            if (TM->addPassesToEmitFile(PM, outputFile, OPTION_CODEGEN_FILE_TYPE)) {
+            if (TM->addPassesToEmitFile(PM, outputFile,
+                                        OPTION_CODEGEN_FILE_TYPE)) {
                 report_fatal_error(
-                        "Target machine can't emit a file of this type.");
+                    "Target machine can't emit a file of this type.");
             }
             PM.run(*m);
         }
     }
     outputFile.flush();
 
-
-    if(OPTION_JIT){
+    if (OPTION_JIT) {
         errs() << "---------\n";
         errs() << "JIT: executing module:\n";
         SimpleJIT jit;
         jit.addModule(CloneModule(m.get()));
-        Expected<JITTargetAddress> memConstructor = jit.findSymbol("init_rawmem_constructor").getAddress();
+        Expected<JITTargetAddress> memConstructor =
+            jit.findSymbol("init_rawmem_constructor").getAddress();
         if (!memConstructor) {
-            errs() << "unable to find `init_rawmem_constructor` in given module:\n";
+            errs() << "unable to find `init_rawmem_constructor` in given "
+                      "module:\n";
             m->print(outs(), nullptr);
             exit(1);
         };
 
-        SimplexhcInitRawmemConstructorTy rawmemConstructor = (SimplexhcInitRawmemConstructorTy) memConstructor.get();
+        SimplexhcInitRawmemConstructorTy rawmemConstructor =
+            (SimplexhcInitRawmemConstructorTy)memConstructor.get();
         rawmemConstructor();
 
-        Expected<JITTargetAddress> maybeMain = jit.findSymbol("main").getAddress();
+        Expected<JITTargetAddress> maybeMain =
+            jit.findSymbol("main").getAddress();
         if (!maybeMain) {
             errs() << "unable to find `main` in given module:\n";
             m->print(outs(), nullptr);
             exit(1);
         }
-        SimplexhcMainTy main = (SimplexhcMainTy) maybeMain.get();
+        SimplexhcMainTy main = (SimplexhcMainTy)maybeMain.get();
         std::cout.flush();
         main();
         std::cout.flush();
@@ -2378,4 +2498,3 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
 
     return 0;
 }
-
