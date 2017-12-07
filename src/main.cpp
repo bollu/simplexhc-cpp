@@ -173,7 +173,7 @@ void materializeLambdaDynamic(const Lambda *l, Module &m, StgIRBuilder &builder,
 void materializeLambdaStatic(const Lambda *l, Function *F, Module &m,
                              StgIRBuilder builder, BuildCtx &bctx);
 
-LLVMClosureData materializeStaticClosureForFn(Function *F, std::string name,
+LLVMClosureData materializeStaticClosure(Function *Dynamic, Function *Static, std::string name,
                                               Module &m, StgIRBuilder &builder,
                                               BuildCtx &bctx);
 
@@ -543,8 +543,8 @@ class BuildCtx {
                 returnTop, builder.getInt64(1), "haveReturnFrames");
             builder.CreateCondBr(haveReturnFrames, next, exit);
 
-            return new LLVMClosureData(materializeStaticClosureForFn(
-                F, "closure_printInt", m, builder, *this));
+            return new LLVMClosureData(materializeStaticClosure(
+                F, nullptr, "closure_printInt", m, builder, *this));
         }();
 
         this->insertTopLevelBinding(
@@ -1023,8 +1023,8 @@ class BuildCtx {
         materializeEnterDynamicClosure(RetFrame, m, builder, bctx);
         builder.CreateRetVoid();
 
-        return new LLVMClosureData(materializeStaticClosureForFn(
-            F, "closure_" + name, m, builder, bctx));
+        return new LLVMClosureData(materializeStaticClosure(
+            F, nullptr, "closure_" + name, m, builder, bctx));
     }
 
     static Function *createBumpPointerAllocator(Module &m, StgIRBuilder builder,
@@ -2098,20 +2098,20 @@ void materializeLambdaDynamic(const Lambda *l, Module &m, StgIRBuilder &builder,
 
 // Create a static closure for a top-level function. That way, we don't need
 // to repeatedly build the closure.
-LLVMClosureData materializeStaticClosureForFn(Function *F, std::string name,
+LLVMClosureData materializeStaticClosure(Function *DynamicCall, Function *StaticCall, std::string name,
                                               Module &m, StgIRBuilder &builder,
                                               BuildCtx &bctx) {
     StructType *closureTy = bctx.ClosureTy[0];
 
     // 2. Create the initializer for the closure
     Constant *initializer = [&] {
-        return ConstantStruct::get(closureTy, {F});
+        return ConstantStruct::get(closureTy, {DynamicCall});
     }();
 
     GlobalVariable *closure =
         new GlobalVariable(m, closureTy, /*isconstant=*/true,
                            GlobalValue::ExternalLinkage, initializer, name);
-    return LLVMClosureData(F, nullptr, closure);
+    return LLVMClosureData(DynamicCall, StaticCall, closure);
 }
 
 // Create a top-level static binding from a "binding" that is parsed in STG.
@@ -2121,14 +2121,14 @@ LLVMClosureData materializeEmptyTopLevelStaticBinding(const Binding *b,
                                                       BuildCtx &bctx) {
     assert(b->getRhs()->free_params_size() == 0 &&
            "top level bindings cannot have any free paramters.");
-    FunctionType *FTy = FunctionType::get(
+    FunctionType *DynamicTy = FunctionType::get(
         builder.getVoidTy(), {builder.getInt8PtrTy()}, /*isVarArg=*/false);
-    Function *F =
-        Function::Create(FTy, GlobalValue::ExternalLinkage, b->getName(), &m);
-    F->addFnAttr(llvm::Attribute::AlwaysInline);
-    F->setCallingConv(CallingConv::Fast);
+    Function *Dynamic =
+        Function::Create(DynamicTy, GlobalValue::ExternalLinkage, b->getName(), &m);
+    Dynamic->addFnAttr(llvm::Attribute::AlwaysInline);
+    Dynamic->setCallingConv(CallingConv::Fast);
 
-    return materializeStaticClosureForFn(F, b->getName() + "_closure", m,
+    return materializeStaticClosure(Dynamic, nullptr, b->getName() + "_closure", m,
                                          builder, bctx);
 }
 
