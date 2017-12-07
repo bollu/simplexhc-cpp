@@ -503,12 +503,6 @@ class BuildCtx {
 
         // *** printInt *** //
         printInt = [&] {
-            Function *F = createNewFunction(
-                m,
-                FunctionType::get(builder.getVoidTy(), {builder.getInt8PtrTy()},
-                                  /*isVarArg=*/false),
-                "printInt");
-            F->setCallingConv(CallingConv::Fast);
 
             Function *printOnlyInt = getOrCreateFunction(
                 m,
@@ -516,35 +510,68 @@ class BuildCtx {
                                   false),
                 "printOnlyInt");
 
-            BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
-            builder.SetInsertPoint(entry);
-            Value *i = this->createPopInt(builder, "i");
-            builder.CreateCall(printOnlyInt, {i});
 
-            BasicBlock *exit = BasicBlock::Create(m.getContext(), "exit", F);
-            builder.SetInsertPoint(exit);
-            builder.CreateRetVoid();
+            auto createPrint = [this](Module &m, Function *F, Value *Int, StgIRBuilder builder, Function *printOnlyInt) {
+                // BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
+                // builder.SetInsertPoint(entry);
+                // Value *i = this->createPopInt(builder, "i");
+                builder.SetInsertPoint(&F->getEntryBlock());
+                builder.CreateCall(printOnlyInt, {Int});
 
-            BasicBlock *next =
-                BasicBlock::Create(m.getContext(), "callnextfn", F);
-            builder.SetInsertPoint(next);
-            Value *cont = this->createPopReturn(builder, "next_cont");
+                BasicBlock *exit = BasicBlock::Create(m.getContext(), "exit", F);
+                builder.SetInsertPoint(exit);
+                builder.CreateRetVoid();
 
-            materializeEnterDynamicClosure(cont, m, builder, *this);
-            builder.CreateRetVoid();
+                BasicBlock *next =
+                    BasicBlock::Create(m.getContext(), "callnextfn", F);
+                builder.SetInsertPoint(next);
+                Value *cont = this->createPopReturn(builder, "next_cont");
 
-            builder.SetInsertPoint(entry);
-            LoadInst *returnTop =
-                builder.CreateLoad(this->stackReturnContTop, "nReturnFrames");
-            returnTop->setMetadata(LLVMContext::MD_invariant_group,
-                                   this->getInvariantGroupNode());
+                materializeEnterDynamicClosure(cont, m, builder, *this);
+                builder.CreateRetVoid();
 
-            Value *haveReturnFrames = builder.CreateICmpUGT(
-                returnTop, builder.getInt64(1), "haveReturnFrames");
-            builder.CreateCondBr(haveReturnFrames, next, exit);
+                builder.SetInsertPoint(&F->getEntryBlock());
+                LoadInst *returnTop =
+                    builder.CreateLoad(this->stackReturnContTop, "nReturnFrames");
+                returnTop->setMetadata(LLVMContext::MD_invariant_group,
+                        this->getInvariantGroupNode());
+
+                Value *haveReturnFrames = builder.CreateICmpUGT(
+                        returnTop, builder.getInt64(1), "haveReturnFrames");
+                builder.CreateCondBr(haveReturnFrames, next, exit);
+            };
+
+            Function *Dynamic = [&] {
+                Function *F = createNewFunction(
+                        m,
+                        FunctionType::get(builder.getVoidTy(), {builder.getInt8PtrTy()},
+                            /*isVarArg=*/false),
+                        "printIntDynamic");
+                F->setCallingConv(CallingConv::Fast);
+                BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
+                builder.SetInsertPoint(entry);
+                Value *i = this->createPopInt(builder, "i");
+                createPrint(m, F, i, builder, printOnlyInt);
+                return F;
+            }();
+
+
+            Function *Static = [&] {
+                Function *F = createNewFunction(
+                        m,
+                        FunctionType::get(builder.getVoidTy(), {builder.getInt64Ty(), builder.getInt8PtrTy()},
+                            /*isVarArg=*/false),
+                        "printIntStatic");
+                F->setCallingConv(CallingConv::Fast);
+                BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
+                builder.SetInsertPoint(entry);
+                Value *i = F->arg_begin();
+                createPrint(m, F, i, builder, printOnlyInt);
+                return F;
+            }();
 
             return new LLVMClosureData(materializeStaticClosure(
-                F, nullptr, "closure_printInt", m, builder, *this));
+                Dynamic, Static, "closure_printInt", m, builder, *this));
         }();
 
         this->insertTopLevelBinding(
@@ -1188,7 +1215,9 @@ void materializeEnterDynamicClosure(Value *V, Module &m, StgIRBuilder &builder,
     }
 
     CallInst *CI = builder.CreateCall(bctx.enterDynamicClosure, {V});
-    CI->setTailCallKind(CallInst::TCK_MustTail);
+    errs() << "TODO: Removing musttail from " << __PRETTY_FUNCTION__ << " for experimentation.\n";
+    // CI->setTailCallKind(CallInst::TCK_MustTail);
+     CI->setTailCallKind(CallInst::TCK_Tail);
     CI->setCallingConv(llvm::CallingConv::Fast);
 };
 
@@ -1224,8 +1253,35 @@ void materializeApStaticallyKnown(const ExpressionAp *ap,
                                   StgIRBuilder &builder, BuildCtx &bctx) {
     std::cerr << "statically known ap: " << *ap << "\n";
     assert(fnValueData.getStaticCallFn());
+    Function *Static = fnValueData.getStaticCallFn();
     errs() << "static fn: " << *fnValueData.getStaticCallFn() << "\n";
-    assert(false);
+
+    std::vector<Value *> Args;
+
+    int i = 0;
+    for (Atom *p : ap->params_reverse_range()) {
+        Value *v = materializeAtom(p, builder, bctx);
+        errs() << __FUNCTION__ << " | V:" << *v << "\n";
+        assert(v->getType() == Static->getFunctionType()->getParamType(i));
+        Args.push_back(v);
+        i++;
+        // if (isa<AtomInt>(p)) {
+        //     Args.push_back(v);
+        // } else {
+        //     LLVMValueData vdata =
+        //         bctx.getIdentifier(cast<AtomIdent>(p)->getIdent());
+        //     if (vdata.stgtype == bctx.getPrimIntTy()) {
+        //         bctx.createPushInt(builder, v);
+        //     } else {
+        //         bctx.createPushBoxed(builder, v);
+        //     }
+        // }
+    }
+    errs() << "TODO: what to do with closure ptr?\n";
+    // create dummy closure ptr.
+    Args.push_back(llvm::UndefValue::get(builder.getInt8PtrTy()));
+    CallInst *CI = builder.CreateCall(Static, Args);
+    CI->setCallingConv(CallingConv::Fast);
 };
 
 void materializeAp(const ExpressionAp *ap, Module &m, StgIRBuilder &builder,
