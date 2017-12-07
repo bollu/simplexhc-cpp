@@ -138,21 +138,28 @@ void setValueAAMetadata(Value *V, const AAMDNodes &N) {
 
 class LLVMClosureData {
    public:
+       using FreeVarsTy = std::vector<Value *>;
+       using iterator = FreeVarsTy::iterator;
+
     LLVMClosureData(Function *dynamicCallFn, Function *staticCallFn,
-                    GlobalVariable *closure)
+                    Value *closure, const std::vector<Value *> &freeVars)
         : dynamicCallFn(dynamicCallFn),
           staticCallFn(staticCallFn),
-          closure(closure){};
+          closure(closure), freeVars(freeVars.begin(), freeVars.end()) {
+          };
     Function *getDynamicCallFn() { return dynamicCallFn; }
-
     Function *getStaticCallFn() { return staticCallFn; }
+    Value *getClosure() { return closure; }
 
-    GlobalVariable *getClosure() { return closure; }
+    unsigned size() const { return freeVars.size(); }
+    iterator begin() { return freeVars.begin(); }
+    iterator end() { return freeVars.end(); }
 
    private:
     AssertingVH<Function> dynamicCallFn;
     AssertingVH<Function> staticCallFn;
-    AssertingVH<GlobalVariable> closure;
+    AssertingVH<Value> closure;
+    FreeVarsTy freeVars;
 };
 
 struct LLVMValueData {
@@ -161,6 +168,7 @@ struct LLVMValueData {
 
     LLVMValueData(Value *v, const StgType *stgtype) : v(v), stgtype(stgtype) {}
 };
+
 
 LLVMClosureData materializeEmptyTopLevelStaticBinding(const Binding *b,
                                                       Module &m,
@@ -2167,7 +2175,7 @@ LLVMClosureData materializeStaticClosure(Function *DynamicCall, Function *Static
     GlobalVariable *closure =
         new GlobalVariable(m, closureTy, /*isconstant=*/true,
                            GlobalValue::ExternalLinkage, initializer, name);
-    return LLVMClosureData(DynamicCall, StaticCall, closure);
+    return LLVMClosureData(DynamicCall, StaticCall, closure, {});
 }
 
 // Create a top-level static binding from a "binding" that is parsed in STG.
