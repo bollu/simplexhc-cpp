@@ -2140,7 +2140,7 @@ void materializeLambdaStatic(const Lambda *l, Function *F, Module &m,
     assert(!F->isDeclaration());
     builder.SetInsertPoint(&F->getEntryBlock());
     createCallTrap(m, builder);
-    builder.CreateRetVoid();
+    // builder.CreateRetVoid();
 }
 
 void materializeLambdaDynamic(const Lambda *l, Module &m, StgIRBuilder &builder,
@@ -2217,7 +2217,8 @@ LLVMClosureData materializeEmptyTopLevelStaticBinding(const Binding *b,
 
     FunctionType *StaticTy = FunctionType::get(builder.getVoidTy(), StaticArgTys, /*isVarArgs=*/false);
     Function *Static = Function::Create(StaticTy, GlobalValue::ExternalLinkage, b->getName() + "Static", &m);
-
+    Static->addFnAttr(llvm::Attribute::AlwaysInline);
+    Static->setCallingConv(CallingConv::Fast);
     return materializeStaticClosure(Dynamic, Static, b->getName() + "_closure", m,
                                          builder, bctx);
 }
@@ -2422,14 +2423,14 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         builder.CreateRetVoid();
     }
 
-    // for (auto It : bindingToClosure) {
-    //     Function *F = It.second.getStaticCallFn();
-    //     const Binding *b = It.first;
-    //     BasicBlock *entry = BasicBlock::Create(m->getContext(), "entry", F);
-    //     builder.SetInsertPoint(entry);
-    //     materializeLambdaStatic(b->getRhs(), F, *m, builder, bctx);
-    //     builder.CreateRetVoid();
-    // }
+    for (auto It : bindingToClosure) {
+        Function *F = It.second.getStaticCallFn();
+        const Binding *b = It.first;
+        BasicBlock *entry = BasicBlock::Create(m->getContext(), "entry", F);
+        builder.SetInsertPoint(entry);
+        materializeLambdaStatic(b->getRhs(), F, *m, builder, bctx);
+        builder.CreateRetVoid();
+    }
 
     {
         PassBuilder PB;
