@@ -1040,14 +1040,14 @@ class BuildCtx {
                                                       Module &m,
                                                       StgIRBuilder builder,
                                                       BuildCtx &bctx) {
-        Function *F = createNewFunction(
+        Function *Dynamic = createNewFunction(
             m,
             FunctionType::get(builder.getVoidTy(), {builder.getInt8PtrTy()},
                               /*varargs = */ false),
             name);
-        F->addFnAttr(llvm::Attribute::AlwaysInline);
-        F->setCallingConv(CallingConv::Fast);
-        BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
+        Dynamic->addFnAttr(llvm::Attribute::AlwaysInline);
+        Dynamic->setCallingConv(CallingConv::Fast);
+        BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", Dynamic);
         builder.SetInsertPoint(entry);
         Value *i = bctx.createPopInt(builder, "i");
         Value *j = bctx.createPopInt(builder, "j");
@@ -1062,7 +1062,7 @@ class BuildCtx {
         builder.CreateRetVoid();
 
         return new LLVMClosureData(materializeStaticClosure(
-            F, nullptr, "closure_" + name, m, builder, bctx));
+            Dynamic, nullptr, "closure_" + name, m, builder, bctx));
     }
 
     static Function *createBumpPointerAllocator(Module &m, StgIRBuilder builder,
@@ -2139,7 +2139,21 @@ void materializeLambdaStatic(const Lambda *l, Function *F, Module &m,
     assert(F);
     assert(!F->isDeclaration());
     builder.SetInsertPoint(&F->getEntryBlock());
-    createCallTrap(m, builder);
+    assert(l->free_params_size() == 0);
+    int i = 0;
+    for(Parameter *p : l->bound_params_range()) {
+        const StgType *Ty = bctx.getTypeFromRawType(p->getTypeRaw());
+        if (Ty == bctx.getPrimIntTy()) {
+            bctx.insertIdentifier(p->getName(), LLVMValueData(F->arg_begin() + i, bctx.getPrimIntTy()));
+        }
+        else {
+            report_fatal_error("unknown type for static lambda");
+        }
+        i++;
+
+    }
+    materializeExpr(l->getRhs(), m, builder, bctx);
+    // createCallTrap(m, builder);
     // builder.CreateRetVoid();
 }
 
@@ -2487,7 +2501,7 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         }
 
         if (optimisationLevel > 0) {
-            for (int i = 0; i < 10; i++) {
+            for (int i = 0; i < 50; i++) {
                 MPM.run(*m, MAM);
                 hackEliminateUnusedAlloc(*m, bctx, optimisationLevel);
             }
