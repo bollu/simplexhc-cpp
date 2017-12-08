@@ -6,6 +6,7 @@
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/IR/ValueHandle.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
@@ -97,13 +98,14 @@ class StgFunctionType : public StgType {
 
     std::string getTypeName() const {
         std::stringstream outs;
-        outs << "ty-";
-        returnType->dump();
+        outs << "fnty-";
+        outs << returnType->getTypeName();
         outs << "(";
         for (const StgType *t : paramTypes) {
             t->dump();
             outs << " ";
         }
+        outs <<")";
         return outs.str();
     }
     static bool classof(const StgType *ty) {
@@ -152,13 +154,14 @@ class LLVMClosureData {
     Value *getClosure() { return closure; }
 
     unsigned size() const { return freeVars.size(); }
-    iterator begin() { return freeVars.begin(); }
-    iterator end() { return freeVars.end(); }
+    iterator free_begin() { return freeVars.begin(); }
+    iterator free_end() { return freeVars.end(); }
+    iterator_range<iterator> free_vars() { return make_range(free_begin(), free_end()); }
 
    private:
-    AssertingVH<Function> dynamicCallFn;
-    AssertingVH<Function> staticCallFn;
-    AssertingVH<Value> closure;
+    Function *dynamicCallFn;
+    Function *staticCallFn;
+    Value *closure;
     FreeVarsTy freeVars;
 };
 
@@ -1286,6 +1289,11 @@ void materializeApStaticallyKnown(const ExpressionAp *ap,
         // }
     }
     errs() << "TODO: what to do with closure ptr?\n";
+    for(Value *v : fnValueData.free_vars()) {
+        assert(v->getType() == Static->getFunctionType()->getParamType(i));
+        Args.push_back(v);
+        i++;
+    }
     // create dummy closure ptr.
     Args.push_back(llvm::UndefValue::get(builder.getInt8PtrTy()));
     CallInst *CI = builder.CreateCall(Static, Args);
@@ -2192,7 +2200,25 @@ LLVMClosureData materializeEmptyTopLevelStaticBinding(const Binding *b,
     Dynamic->addFnAttr(llvm::Attribute::AlwaysInline);
     Dynamic->setCallingConv(CallingConv::Fast);
 
-    return materializeStaticClosure(Dynamic, nullptr, b->getName() + "_closure", m,
+
+    std::vector<Type *> StaticArgTys;
+    for(Parameter *p : b->getRhs()->bound_params_range()) {
+        const StgType *StgTy = bctx.getTypeFromRawType(p->getTypeRaw());
+        if (StgTy == bctx.getPrimIntTy()) {
+            StaticArgTys.push_back(builder.getInt64Ty());
+        }
+        else {
+            std::cerr << "Do not know how to code generate type: " << StgTy->getTypeName() << "|param: " << *p << "\n";
+            report_fatal_error("unknown type for top level binding");
+        }
+    }
+    // We need this for the closure ptr.
+    StaticArgTys.push_back(builder.getInt8PtrTy());
+
+    FunctionType *StaticTy = FunctionType::get(builder.getVoidTy(), StaticArgTys, /*isVarArgs=*/false);
+    Function *Static = Function::Create(StaticTy, GlobalValue::ExternalLinkage, b->getName() + "Static", &m);
+
+    return materializeStaticClosure(Dynamic, Static, b->getName() + "_closure", m,
                                          builder, bctx);
 }
 
