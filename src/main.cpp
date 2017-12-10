@@ -1293,9 +1293,10 @@ void materializeApStaticallyKnown(const ExpressionAp *ap,
     assert(fnValueData.getStaticCallFn());
     Function *Static = fnValueData.getStaticCallFn();
     errs() << "static fn: " << *fnValueData.getStaticCallFn() << "\n";
+    // We need -1 for the closure struct passage.
+    assert (ap->getNumParams() == -1 + fnValueData.getStaticCallFn()->getFunctionType()->getNumParams() && "currently only saturated function calls supported.");
 
     std::vector<Value *> Args;
-
     int i = 0;
     for (Atom *p : ap->params_range()) {
         Value *v = materializeAtom(p, builder, bctx);
