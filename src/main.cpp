@@ -1297,7 +1297,7 @@ void materializeApStaticallyKnown(const ExpressionAp *ap,
     std::vector<Value *> Args;
 
     int i = 0;
-    for (Atom *p : ap->params_reverse_range()) {
+    for (Atom *p : ap->params_range()) {
         Value *v = materializeAtom(p, builder, bctx);
         if (v->getType()->isPointerTy())
             v = builder.CreateBitCast(v, builder.getInt8PtrTy());
