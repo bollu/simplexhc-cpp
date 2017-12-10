@@ -1047,22 +1047,49 @@ class BuildCtx {
             name);
         Dynamic->addFnAttr(llvm::Attribute::AlwaysInline);
         Dynamic->setCallingConv(CallingConv::Fast);
-        BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", Dynamic);
-        builder.SetInsertPoint(entry);
-        Value *i = bctx.createPopInt(builder, "i");
-        Value *j = bctx.createPopInt(builder, "j");
-        Value *result = FResultBuilder(
-            builder, i, j);  // builder.CreateMul(i, j, "result");
-        result->setName("result");
+        {
+            BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", Dynamic);
+            builder.SetInsertPoint(entry);
+            Value *i = bctx.createPopInt(builder, "i");
+            Value *j = bctx.createPopInt(builder, "j");
+            Value *result = FResultBuilder(
+                    builder, i, j);  // builder.CreateMul(i, j, "result");
+            result->setName("result");
 
-        bctx.createPushInt(builder, result);
+            bctx.createPushInt(builder, result);
 
+            Value *RetFrame = bctx.createPopReturn(builder, "return_frame");
+            materializeEnterDynamicClosure(RetFrame, m, builder, bctx);
+            builder.CreateRetVoid();
+        }
+
+
+        Function *Static = createNewFunction(
+            m,
+            FunctionType::get(builder.getVoidTy(), {builder.getInt64Ty(), builder.getInt64Ty(), builder.getInt8PtrTy()},
+                              /*varargs = */ false),
+            name + "Static");
+
+        Static->addFnAttr(llvm::Attribute::AlwaysInline);
+        Static->setCallingConv(CallingConv::Fast);
+        {
+            BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", Static);
+            builder.SetInsertPoint(entry);
+            Value *i = Static->arg_begin();
+            Value *j = Static->arg_begin() + 1;
+            Value *result = FResultBuilder(
+                    builder, i, j);  // builder.CreateMul(i, j, "result");
+            result->setName("result");
+
+            bctx.createPushInt(builder, result);
+
+        }
         Value *RetFrame = bctx.createPopReturn(builder, "return_frame");
         materializeEnterDynamicClosure(RetFrame, m, builder, bctx);
         builder.CreateRetVoid();
 
         return new LLVMClosureData(materializeStaticClosure(
-            Dynamic, nullptr, "closure_" + name, m, builder, bctx));
+            Dynamic, Static, "closure_" + name, m, builder, bctx));
     }
 
     static Function *createBumpPointerAllocator(Module &m, StgIRBuilder builder,
@@ -1272,7 +1299,10 @@ void materializeApStaticallyKnown(const ExpressionAp *ap,
     int i = 0;
     for (Atom *p : ap->params_reverse_range()) {
         Value *v = materializeAtom(p, builder, bctx);
+        if (v->getType()->isPointerTy())
+            v = builder.CreateBitCast(v, builder.getInt8PtrTy());
         errs() << __FUNCTION__ << " | V:" << *v << "\n";
+        errs() << "v->getType(): " << *v->getType() << " | fn Arg:" << *Static->getFunctionType()->getParamType(i) << "\n";
         assert(v->getType() == Static->getFunctionType()->getParamType(i));
         Args.push_back(v);
         i++;
@@ -2143,12 +2173,14 @@ void materializeLambdaStatic(const Lambda *l, Function *F, Module &m,
     int i = 0;
     for(Parameter *p : l->bound_params_range()) {
         const StgType *Ty = bctx.getTypeFromRawType(p->getTypeRaw());
-        if (Ty == bctx.getPrimIntTy()) {
-            bctx.insertIdentifier(p->getName(), LLVMValueData(F->arg_begin() + i, bctx.getPrimIntTy()));
-        }
-        else {
-            report_fatal_error("unknown type for static lambda");
-        }
+        bctx.insertIdentifier(p->getName(), LLVMValueData(F->arg_begin() + i, Ty));
+        // if (Ty == bctx.getPrimIntTy()) {
+        //     bctx.insertIdentifier(p->getName(), LLVMValueData(F->arg_begin() + i, bctx.getPrimIntTy()));
+        // }
+        // else {
+        //     bctx.insertIdentifier(p->getName(), LLVMValueData(F->arg_begin() + i, Ty));
+        //     // report_fatal_error("unknown type for static lambda");
+        // }
         i++;
 
     }
@@ -2222,8 +2254,7 @@ LLVMClosureData materializeEmptyTopLevelStaticBinding(const Binding *b,
             StaticArgTys.push_back(builder.getInt64Ty());
         }
         else {
-            std::cerr << "Do not know how to code generate type: " << StgTy->getTypeName() << "|param: " << *p << "\n";
-            report_fatal_error("unknown type for top level binding");
+            StaticArgTys.push_back(builder.getInt8PtrTy());
         }
     }
     // We need this for the closure ptr.
