@@ -7,6 +7,9 @@ set(CMAKE_CXX_FLAGS "-fdiagnostics-color=always -fno-rtti -g -Wall")
 
 # LLVM
 find_package(LLVM REQUIRED)
+
+# Boost
+find_package(Boost REQUIRED)
 # HACK: I'm using all. I need to ask on the mailing list how to fix this.
 llvm_map_components_to_libnames(LLVM_LIBS AllTargetsAsmPrinters 
     AllTargetsAsmParsers Core Support ORCJIT MCJIT ExecutionEngine
