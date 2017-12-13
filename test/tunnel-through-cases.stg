@@ -3,17 +3,16 @@
 # CHECK: 7
 
 # RUN: %loadSimplexhc %s  --emit-llvm -O 3 | FileCheck %s -check-prefix=IR
-#IR:      define fastcc void @main(i8*) #0 {
-#IR-NEXT: entry:
-#IR-NEXT:   tail call void @printOnlyInt(i64 0)
+# IR:  tail call void @printOnlyInt(i64 0)
 #
+                                #primSubtract(xmin3 4);;;
 
 binding sub7 = \(a : PrimInt) -> PrimInt {
     case a () of
         0 -> 1;
         x -> case primSubtract (x 1) of
-                xmin1 -> case primSubtract (xmin1 2) of
-                                xmin3 -> primSubtract(xmin3 4);;;
+                xmin1 -> case primSubtract (xmin1 6) of
+                                xmin3 -> xmin3 ();;;
 };
 
 

@@ -2,9 +2,7 @@
 # CHECK: 1
 
 # RUN: %loadSimplexhc %s  --emit-llvm -O 3 | FileCheck %s -check-prefix=IR
-#IR:      define fastcc void @main(i8*) #0 {
-#IR-NEXT: entry:
-#IR-NEXT:   tail call void @printOnlyInt(i64 1)
+#IR:   tail call void @printOnlyInt(i64 1)
 
 # a complicated way to return 1 for positive inputs.
 # here to check that llvm can tear through recursion. Let's see.

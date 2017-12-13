@@ -166,7 +166,7 @@ class LLVMClosureData {
 };
 
 struct LLVMValueData {
-    AssertingVH<Value> v;
+    Value* v;
     const StgType *stgtype;
 
     LLVMValueData(Value *v, const StgType *stgtype) : v(v), stgtype(stgtype) {}
@@ -364,14 +364,14 @@ class BuildCtx {
 
     LLVMClosureData *printInt;
     LLVMClosureData *primMultiply;
-    AssertingVH<GlobalVariable> stackInt;
-    AssertingVH<GlobalVariable> stackIntTop;
+    GlobalVariable* stackInt;
+    GlobalVariable* stackIntTop;
 
-    AssertingVH<GlobalVariable> stackBoxed;
-    AssertingVH<GlobalVariable> stackBoxedTop;
+    GlobalVariable* stackBoxed;
+    GlobalVariable* stackBoxedTop;
 
     // AssertingVH<GlobalVariable> enteringClosureAddr;
-    AssertingVH<Function> enterDynamicClosure;
+    Function* enterDynamicClosure;
 
     static const unsigned MAX_FREE_PARAMS = 10;
     // type of closure { i64 tag, () -> () fn, <free vars> }
@@ -379,9 +379,9 @@ class BuildCtx {
     // type of values in return stack: () -> ()
     Type *ContTy;
     // stack of return values, in reality a large array
-    AssertingVH<GlobalVariable> stackReturnCont;
+    GlobalVariable *stackReturnCont;
     // pointer to offset to top of return stack.
-    AssertingVH<GlobalVariable> stackReturnContTop;
+    GlobalVariable *stackReturnContTop;
 
     GlobalVariable *llvmNoDebug;
     bool nodebug;
@@ -559,6 +559,7 @@ class BuildCtx {
                             /*isVarArg=*/false),
                         "printIntDynamic");
                 F->setCallingConv(CallingConv::Fast);
+                F->setLinkage(GlobalValue::InternalLinkage);
                 BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
                 builder.SetInsertPoint(entry);
                 Value *i = this->createPopInt(builder, "i");
@@ -574,6 +575,7 @@ class BuildCtx {
                             /*isVarArg=*/false),
                         "printIntStatic");
                 F->setCallingConv(CallingConv::Fast);
+                F->setLinkage(GlobalValue::InternalLinkage);
                 BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
                 builder.SetInsertPoint(entry);
                 Value *i = F->arg_begin();
@@ -805,11 +807,11 @@ class BuildCtx {
     }
 
    private:
-    AssertingVH<Function> pushInt, popInt;
-    AssertingVH<Function> pushBoxed, popBoxed;
-    AssertingVH<Function> pushReturnCont, popReturnCont;
-    AssertingVH<Function> bumpPointerAlloc;
-    AssertingVH<Function> realMalloc;
+    Function *pushInt, *popInt;
+    Function *pushBoxed, *popBoxed;
+    Function *pushReturnCont, *popReturnCont;
+    Function *bumpPointerAlloc;
+    Function *realMalloc;
     friend class Scoper;
 
     // push a scope for identifier resolution
@@ -848,10 +850,10 @@ class BuildCtx {
 
     static void addStack(Module &m, StgIRBuilder &builder, BuildCtx &bctx,
                          Type *elemTy, std::string name, size_t size,
-                         AssertingVH<Function> &pushFn,
-                         AssertingVH<Function> &popFn,
-                         AssertingVH<GlobalVariable> &stack,
-                         AssertingVH<GlobalVariable> &stackTop,
+                         Function *&pushFn,
+                         Function *&popFn,
+                         GlobalVariable *&stack,
+                         GlobalVariable *&stackTop,
                          GlobalVariable *llvmNoDebug) {
         popFn = createNewFunction(
             m, FunctionType::get(elemTy, /*isVarArg=*/false), "pop" + name);
@@ -999,6 +1001,7 @@ class BuildCtx {
         // F->addFnAttr(Attribute::NoInline);
         F->addFnAttr(Attribute::AlwaysInline);
         F->setCallingConv(CallingConv::Fast);
+        F->setLinkage(GlobalValue::InternalLinkage);
 
         BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
         builder.SetInsertPoint(entry);
@@ -1047,6 +1050,7 @@ class BuildCtx {
             name);
         Dynamic->addFnAttr(llvm::Attribute::AlwaysInline);
         Dynamic->setCallingConv(CallingConv::Fast);
+        Dynamic->setLinkage(GlobalValue::InternalLinkage);
         {
             BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", Dynamic);
             builder.SetInsertPoint(entry);
@@ -1072,6 +1076,7 @@ class BuildCtx {
 
         Static->addFnAttr(llvm::Attribute::AlwaysInline);
         Static->setCallingConv(CallingConv::Fast);
+        Static->setLinkage(GlobalValue::InternalLinkage);
         {
             BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", Static);
             builder.SetInsertPoint(entry);
@@ -1161,6 +1166,7 @@ class BuildCtx {
             alloc->addFnAttr(Attribute::NoInline);
             alloc->addFnAttr(Attribute::InaccessibleMemOnly);
             alloc->setCallingConv(CallingConv::Fast);
+            // alloc->setLinkage(GlobalValue::InternalLinkage);
             // this is fucked, but in a cool way: GC makes memory allocation
             // pure :) alloc->addFnAttr(Attribute::ReadNone); Why does readnone
             // fuck it up?
@@ -1898,6 +1904,7 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
     }();
     continuation->addFnAttr(llvm::Attribute::AlwaysInline);
     continuation->setCallingConv(CallingConv::Fast);
+    continuation->setLinkage(GlobalValue::InternalLinkage);
 
     Type *closureTy = bctx.ClosureTy[freeVarsInAlts.size()];
     Value *clsTyped = bctx.createCallAllocate(
@@ -2029,6 +2036,7 @@ Function *_materializeDynamicLetBinding(const Binding *b, Module &m,
         Function::Create(FTy, GlobalValue::ExternalLinkage, b->getName(), &m);
 
     F->addFnAttr(llvm::Attribute::AlwaysInline);
+    F->setLinkage(GlobalValue::InternalLinkage);
     F->setCallingConv(CallingConv::Fast);
 
     BasicBlock *entry = BasicBlock::Create(m.getContext(), "entry", F);
@@ -2246,6 +2254,8 @@ LLVMClosureData materializeEmptyTopLevelStaticBinding(const Binding *b,
         Function::Create(DynamicTy, GlobalValue::ExternalLinkage, b->getName(), &m);
     Dynamic->addFnAttr(llvm::Attribute::AlwaysInline);
     Dynamic->setCallingConv(CallingConv::Fast);
+    if (b->getName() != "main")
+        Dynamic->setLinkage(GlobalValue::InternalLinkage);
 
 
     std::vector<Type *> StaticArgTys;
@@ -2265,6 +2275,8 @@ LLVMClosureData materializeEmptyTopLevelStaticBinding(const Binding *b,
     Function *Static = Function::Create(StaticTy, GlobalValue::ExternalLinkage, b->getName() + "Static", &m);
     Static->addFnAttr(llvm::Attribute::AlwaysInline);
     Static->setCallingConv(CallingConv::Fast);
+    if (b->getName() != "main")
+        Static->setLinkage(GlobalValue::InternalLinkage);
     return materializeStaticClosure(Dynamic, Static, b->getName() + "_closure", m,
                                          builder, bctx);
 }
@@ -2328,8 +2340,7 @@ void hackEliminateUnusedAlloc(Module &m, BuildCtx &bctx,
                 OPTION_OPTIMISATION_LEVEL);
 
         if (optimisationLevel > 0) {
-            MPM = PB.buildModuleOptimizationPipeline(optimisationLevel);
-            ;
+            MPM = PB.buildModuleSimplificationPipeline(optimisationLevel, PassBuilder::ThinLTOPhase::None);
             FPM = PB.buildFunctionSimplificationPipeline(
                 optimisationLevel, PassBuilder::ThinLTOPhase::None);
         }
@@ -2492,7 +2503,6 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
 
         if (optimisationLevel > PassBuilder::OptimizationLevel::O0) {
             MPM = PB.buildModuleOptimizationPipeline(optimisationLevel);
-            ;
             FPM = PB.buildFunctionSimplificationPipeline(
                 optimisationLevel, PassBuilder::ThinLTOPhase::None);
             FPM.addPass(StackMatcherPass<StackNames::ReturnStackName>());

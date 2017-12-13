@@ -261,6 +261,10 @@ class ExpressionAp : public Expression {
         return E->getKind() == Expression::EK_Ap;
     }
 
+    unsigned getNumParams() const {
+        return args.size();
+    }
+
    private:
     Identifier fn;
     ParamsTy args;
@@ -586,6 +590,7 @@ class Lambda {
 
     const_iterator bound_params_begin() const { return boundparams.begin(); }
     const_iterator bound_params_end() const { return boundparams.end(); }
+    unsigned bound_params_size() const { return boundparams.size(); }
 
     iterator_range<const_iterator> bound_params_range() const {
         return make_range(bound_params_begin(), bound_params_end());

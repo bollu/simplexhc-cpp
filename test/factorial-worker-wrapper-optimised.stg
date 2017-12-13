@@ -2,9 +2,7 @@
 # CHECK: 120
 #
 # RUN: %loadSimplexhc %s  --emit-llvm -O 3 | FileCheck %s -check-prefix=IR
-# IR: define fastcc void @main(i8*) #0 {
-# IR-NEXT: entry:
-# IR-NEXT:   tail call void @printOnlyInt(i64 120)
+# IR:   tail call void @printOnlyInt(i64 120)
 
 
 binding factorial = \(a : PrimInt) -> PrimInt {
