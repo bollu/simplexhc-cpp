@@ -1396,7 +1396,16 @@ void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
             bctx.insertIdentifier(var, LLVMValueData(LI, bctx.getPrimIntTy()));
         } else {
             LoadInst *LI = builder.CreateLoad(
-                Slot, "cons_mem_as_int_" + std::to_string(i)); LI->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode()); Value *V = builder.CreateIntToPtr( LI, getRawMemTy(builder), "cons_rawmem_" + std::to_string(i)); const StgType *Ty = bctx.getTypeFromName(cons->getTypeName(i)); bctx.insertIdentifier(var, LLVMValueData(V, Ty)); } i++; } materializeExpr(d->getRHS(), m, builder, bctx); } static const StgType *getCommonDataTypeFromAlts(const ExpressionCase *c, const StgIRBuilder builder, const BuildCtx &bctx) {
+                Slot, "cons_mem_as_int_" + std::to_string(i)); LI->setMetadata(LLVMContext::MD_invariant_group, bctx.getInvariantGroupNode());
+            Value *V = builder.CreateIntToPtr( LI, getRawMemTy(builder), "cons_rawmem_" + std::to_string(i));
+            const StgType *Ty = bctx.getTypeFromName(cons->getTypeName(i));
+            bctx.insertIdentifier(var, LLVMValueData(V, Ty)); } i++;
+    }
+    materializeExpr(d->getRHS(), m, builder, bctx);
+}
+
+
+static const StgType *getCommonDataTypeFromAlts(const ExpressionCase *c, const StgIRBuilder builder, const BuildCtx &bctx) {
     const StgType *commondecl = nullptr;
     auto setCommonType = [&](const StgType *newdecl) -> void {
         if (commondecl == nullptr) {
@@ -1415,8 +1424,8 @@ void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
             setCommonType(bctx.getTypeFromName(dc->getParent()->getTypeName()));
         } else if (isa<CaseAltInt>(a)) {
             setCommonType(bctx.getPrimIntTy());
-        } else if (CaseAltVariable *v = dyn_cast<CaseAltVariable>(a)) {
-            setCommonType(bctx.getTypeFromName(v->getLHS()));
+        } else if (isa<CaseAltVariable>(a)) {
+            setCommonType(getTypeOfExpression(c->getScrutinee(), bctx));
         } else if (isa<CaseAltDefault>(a)){
             setCommonType(bctx.getVoidTy());
         }
@@ -2157,6 +2166,7 @@ LLVMValueData materializeExprStrict(const Expression *e, Module &m, StgIRBuilder
 
             }
             BasicBlock *focusedBB = builder.GetInsertBlock();
+
             BasicBlock *defaultBB = BasicBlock::Create(builder.getContext(), "case_default",
                                                        builder.GetInsertBlock()->getParent());
             SwitchInst *switchInst = builder.CreateSwitch(scrutinee.v, defaultBB, ec->alts_size());
@@ -2191,8 +2201,22 @@ LLVMValueData materializeExprStrict(const Expression *e, Module &m, StgIRBuilder
                     assert(mergePHI);
                     mergePHI->addIncoming(V.v, defaultBB);
                 }
+                builder.CreateBr(mergeBB);
                 builder.SetInsertPoint(focusedBB);
-            } else {
+            }
+            else if (ec->getDefaultAlt()) {
+                builder.SetInsertPoint(defaultBB);
+                LLVMValueData V = materializeExprStrict(av->getRHS(), m, builder, bctx);
+
+                if (V.stgtype != bctx.getVoidTy()) {
+                    assert(mergePHI);
+                    mergePHI->addIncoming(V.v, defaultBB);
+                }
+
+                builder.CreateBr(mergeBB);
+                builder.SetInsertPoint (focusedBB);
+            }
+            else {
                 builder.SetInsertPoint(defaultBB);
                 sxhc::RuntimeDebugBuilder::createCPUPrinter(
                         builder, "Non exhaustive patterns in case", scrutinee.v, "\n");
@@ -2202,12 +2226,14 @@ LLVMValueData materializeExprStrict(const Expression *e, Module &m, StgIRBuilder
                 if (mergePHI) {
                     mergePHI->addIncoming(UndefValue::get(mergePHI->getType()), defaultBB);
                 }
+                builder.CreateBr(mergeBB);
                 builder.SetInsertPoint (focusedBB);
             }
 
             for (const CaseAlt *ca : ec->alts_range()) {
                 // already handled.
                 if (isa<CaseAltVariable>(ca)) continue;
+                if (isa<CaseAltDefault>(ca)) continue;
                 const CaseAltInt *ci = cast<CaseAltInt>(ca);
 
                 BasicBlock *caseBB = BasicBlock::Create(builder.getContext(), "", focusedBB->getParent());
@@ -2218,11 +2244,13 @@ LLVMValueData materializeExprStrict(const Expression *e, Module &m, StgIRBuilder
                     assert(mergePHI);
                     mergePHI->addIncoming(vd.v, caseBB);
                 }
+                builder.CreateBr(mergeBB);
                 builder.SetInsertPoint(focusedBB);
-
             }
+
+            builder.SetInsertPoint(mergeBB);
             // Output of case is this merge phi.
-            return LLVMValueData(mergePHI, bctx.getPrimIntTy());
+            return LLVMValueData(mergePHI, CommonType);
             break;
         }
         case Expression::EK_Let:
@@ -2238,12 +2266,6 @@ LLVMValueData materializeExprStrict(const Expression *e, Module &m, StgIRBuilder
 
 void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
                      BuildCtx &bctx) {
-    if (isExprStrict(e))
-    {
-        materializeExprStrict(e, m, builder, bctx);
-
-    }
-    else {
         switch (e->getKind()) {
             case Expression::EK_Ap:
                 materializeAp(cast<ExpressionAp>(e), m, builder, bctx);
@@ -2262,7 +2284,6 @@ void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
                 materializeExprIntLiteral(cast<ExpressionIntLiteral>(e), m, builder,
                                           bctx);
         };
-    }
 }
 
 void materializeLambdaStatic(const Lambda *l, Function *F, Module &m,
@@ -2286,6 +2307,25 @@ void materializeLambdaStatic(const Lambda *l, Function *F, Module &m,
 
     }
     materializeExpr(l->getRhs(), m, builder, bctx);
+    // createCallTrap(m, builder);
+    // builder.CreateRetVoid();
+}
+
+
+void materializeLambdaStrict(const Lambda *l, Function *F, Module &m,
+                             StgIRBuilder builder, BuildCtx &bctx) {
+    assert(F);
+    assert(!F->isDeclaration());
+    builder.SetInsertPoint(&F->getEntryBlock());
+    assert(l->free_params_size() == 0);
+    int i = 0;
+    for(Parameter *p : l->bound_params_range()) {
+        const StgType *Ty = bctx.getTypeFromRawType(p->getTypeRaw());
+        bctx.insertIdentifier(p->getName(), LLVMValueData(F->arg_begin() + i, Ty));
+        i++;
+
+    }
+    materializeExprStrict(l->getRhs(), m, builder, bctx);
     // createCallTrap(m, builder);
     // builder.CreateRetVoid();
 }
@@ -2386,12 +2426,13 @@ LLVMClosureData materializeEmptyTopLevelStaticBinding(const Binding *b,
     }();
 
     FunctionType *StrictTy = FunctionType::get(StrictRetTy, StrictArgTys, /*isVarArgs=*/false);
-    Function *Strict = Function::Create(StrictTy, GlobalValue::ExternalLinkage, b->getName() + "Static", &m);
+    Function *Strict = Function::Create(StrictTy, GlobalValue::ExternalLinkage, b->getName() + "Strict", &m);
 
-    Static->addFnAttr(llvm::Attribute::AlwaysInline);
-    Static->setCallingConv(CallingConv::Fast);
+    Strict->addFnAttr(llvm::Attribute::AlwaysInline);
+    Strict->setCallingConv(CallingConv::Fast);
     if (b->getName() != "main")
-        Static->setLinkage(GlobalValue::InternalLinkage);
+        Strict->setLinkage(GlobalValue::InternalLinkage);
+
     return materializeStaticClosure(Dynamic, Static, Strict, b->getName() + "_closure", m,
                                          builder, bctx);
 }
@@ -2586,21 +2627,32 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
             b->getName(), createStgTypeForLambda(b->getRhs(), bctx), cls);
     }
 
-    for (auto It : bindingToClosure) {
-        Function *F = It.second.getDynamicCallFn();
-        const Binding *b = It.first;
-        BasicBlock *entry = BasicBlock::Create(m->getContext(), "entry", F);
-        builder.SetInsertPoint(entry);
-        materializeLambdaDynamic(b->getRhs(), *m, builder, bctx);
-        builder.CreateRetVoid();
-    }
+    //for (auto It : bindingToClosure) {
+    //    Function *F = It.second.getDynamicCallFn();
+    //    const Binding *b = It.first;
+    //    BasicBlock *entry = BasicBlock::Create(m->getContext(), "entry", F);
+    //    builder.SetInsertPoint(entry);
+    //    materializeLambdaDynamic(b->getRhs(), *m, builder, bctx);
+    //    builder.CreateRetVoid();
+    //}
+
+    //for (auto It : bindingToClosure) {
+    //    Function *F = It.second.getStaticCallFn();
+    //    const Binding *b = It.first;
+    //    BasicBlock *entry = BasicBlock::Create(m->getContext(), "entry", F);
+    //    builder.SetInsertPoint(entry);
+    //    materializeLambdaStatic(b->getRhs(), F, *m, builder, bctx);
+    //    builder.CreateRetVoid();
+    // }
+
 
     for (auto It : bindingToClosure) {
-        Function *F = It.second.getStaticCallFn();
+        Function *F = It.second.getStrictCallFn();
         const Binding *b = It.first;
         BasicBlock *entry = BasicBlock::Create(m->getContext(), "entry", F);
         builder.SetInsertPoint(entry);
-        materializeLambdaStatic(b->getRhs(), F, *m, builder, bctx);
+
+        materializeLambdaStrict(b->getRhs(), F, *m, builder, bctx);
         builder.CreateRetVoid();
     }
 
