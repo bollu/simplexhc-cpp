@@ -2169,6 +2169,7 @@ LLVMValueData materializeExprStrict(const Expression *e, Module &m, StgIRBuilder
 
             BasicBlock *defaultBB = BasicBlock::Create(builder.getContext(), "case_default",
                                                        builder.GetInsertBlock()->getParent());
+
             SwitchInst *switchInst = builder.CreateSwitch(scrutinee.v, defaultBB, ec->alts_size());
             BasicBlock *mergeBB = BasicBlock::Create(builder.getContext(), "case_merge", builder.GetInsertBlock()->getParent());
 
@@ -2325,7 +2326,15 @@ void materializeLambdaStrict(const Lambda *l, Function *F, Module &m,
         i++;
 
     }
-    materializeExprStrict(l->getRhs(), m, builder, bctx);
+    LLVMValueData out = materializeExprStrict(l->getRhs(), m, builder, bctx);
+    if (out.stgtype == bctx.getVoidTy()) {
+        builder.CreateRetVoid();
+    }
+    else {
+        assert(out.v);
+        builder.CreateRet(out.v);
+
+    }
     // createCallTrap(m, builder);
     // builder.CreateRetVoid();
 }
@@ -2386,8 +2395,8 @@ LLVMClosureData materializeEmptyTopLevelStaticBinding(const Binding *b,
         Function::Create(DynamicTy, GlobalValue::ExternalLinkage, b->getName(), &m);
     Dynamic->addFnAttr(llvm::Attribute::AlwaysInline);
     Dynamic->setCallingConv(CallingConv::Fast);
-    if (b->getName() != "main")
-        Dynamic->setLinkage(GlobalValue::InternalLinkage);
+    // if (b->getName() != "main")
+    // Dynamic->setLinkage(GlobalValue::InternalLinkage);
 
 
     std::vector<Type *> StaticArgTys;
@@ -2430,6 +2439,7 @@ LLVMClosureData materializeEmptyTopLevelStaticBinding(const Binding *b,
 
     Strict->addFnAttr(llvm::Attribute::AlwaysInline);
     Strict->setCallingConv(CallingConv::Fast);
+
     if (b->getName() != "main")
         Strict->setLinkage(GlobalValue::InternalLinkage);
 
@@ -2653,7 +2663,7 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         builder.SetInsertPoint(entry);
 
         materializeLambdaStrict(b->getRhs(), F, *m, builder, bctx);
-        builder.CreateRetVoid();
+        // builder.CreateRetVoid();
     }
 
     {
