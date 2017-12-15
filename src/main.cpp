@@ -34,6 +34,7 @@
 #include "sxhc/libstg.h"
 #include "sxhc/optimizer.h"
 #include "sxhc/stgir.h"
+#include "sxhc/types.h"
 
 using namespace llvm;
 
@@ -54,65 +55,6 @@ class AliasCtx;
 typedef void (*SimplexhcMainTy)(void);
 typedef void (*SimplexhcInitRawmemConstructorTy)(void);
 
-class StgType {
-   public:
-    enum StgTypeKind { STK_Data, STK_Function };
-    StgTypeKind getKind() const { return kind; }
-    virtual std::string getTypeName() const = 0;
-    virtual void dump() const { cout << getTypeName(); }
-
-   private:
-    StgTypeKind kind;
-
-   protected:
-    StgType(StgTypeKind kind) : kind(kind){};
-};
-
-class StgDataType : public StgType {
-   private:
-    const DataType *datatype;
-
-   public:
-    explicit StgDataType(const DataType *datatype)
-        : StgType(StgType::STK_Data), datatype(datatype){};
-    const DataType *getDataType() const { return datatype; };
-
-    std::string getTypeName() const { return datatype->getTypeName(); }
-
-    static bool classof(const StgType *ty) { return ty->getKind() == STK_Data; }
-};
-
-class StgFunctionType : public StgType {
-   private:
-    const StgType *returnType;
-    SmallVector<const StgType *, 4> paramTypes;
-
-   public:
-    StgFunctionType(const StgType *returnType,
-                    ArrayRef<const StgType *> paramTypesref)
-        : StgType(StgType::STK_Function), returnType(returnType) {
-        for (const StgType *ty : paramTypesref) paramTypes.push_back(ty);
-    }
-
-    const StgType *getReturnType() const { return returnType; }
-
-    std::string getTypeName() const {
-        std::stringstream outs;
-        outs << "fnty-";
-        outs << returnType->getTypeName();
-        outs << "(";
-        for (const StgType *t : paramTypes) {
-            t->dump();
-            outs << " ";
-        }
-        outs <<")";
-        return outs.str();
-    }
-    static bool classof(const StgType *ty) {
-        return ty->getKind() == STK_Function;
-    }
-};
-
 void materializeExpr(const Expression *e, Module &m, StgIRBuilder &builder,
                      BuildCtx &bctx);
 
@@ -132,45 +74,6 @@ void loadFreeVariableFromClosure(Value *closure, Identifier name,
 
 void materializeEnterDynamicClosure(Value *V, Module &m, StgIRBuilder &builder,
                                     BuildCtx &bctx);
-
-// Set AA metadata if the value is an instruction.
-void setValueAAMetadata(Value *V, const AAMDNodes &N) {
-    if (Instruction *I = dyn_cast<Instruction>(V)) I->setAAMetadata(N);
-}
-
-class LLVMClosureData {
-   public:
-       using FreeVarsTy = std::vector<Value *>;
-       using iterator = FreeVarsTy::iterator;
-
-    LLVMClosureData(Function *dynamicCallFn, Function *staticCallFn,
-                    Value *closure, const std::vector<Value *> &freeVars)
-        : dynamicCallFn(dynamicCallFn),
-          staticCallFn(staticCallFn),
-          closure(closure), freeVars(freeVars.begin(), freeVars.end()) {
-          };
-    Function *getDynamicCallFn() { return dynamicCallFn; }
-    Function *getStaticCallFn() { return staticCallFn; }
-    Value *getClosure() { return closure; }
-
-    unsigned size() const { return freeVars.size(); }
-    iterator free_begin() { return freeVars.begin(); }
-    iterator free_end() { return freeVars.end(); }
-    iterator_range<iterator> free_vars() { return make_range(free_begin(), free_end()); }
-
-   private:
-    Function *dynamicCallFn;
-    Function *staticCallFn;
-    Value *closure;
-    FreeVarsTy freeVars;
-};
-
-struct LLVMValueData {
-    Value* v;
-    const StgType *stgtype;
-
-    LLVMValueData(Value *v, const StgType *stgtype) : v(v), stgtype(stgtype) {}
-};
 
 
 LLVMClosureData materializeEmptyTopLevelStaticBinding(const Binding *b,
