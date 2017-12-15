@@ -36,7 +36,7 @@ add_executable(sxhc
     lib/libstg.c
     ${BISON_Parser_OUTPUTS}
     ${FLEX_Lexer_OUTPUTS}
-    )
+        include/sxhc/LazyCodegen.h)
 
 target_link_libraries(sxhc ${LLVM_LIBS}  -lstdc++)
 set_target_properties(sxhc PROPERTIES CXX_STANDARD 14)
@@ -55,7 +55,7 @@ add_custom_target(
 
 # libstg
 add_library(stgruntime
-    SHARED lib/libstg.c)
+    SHARED lib/libstg.c include/sxhc/LazyCodegen.h)
 set_target_properties(stgruntime PROPERTIES C_STANDARD 99)
 
 # DOXYGEN

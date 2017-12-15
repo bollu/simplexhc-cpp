@@ -78,13 +78,16 @@ class LLVMClosureData {
        using iterator = FreeVarsTy::iterator;
 
     LLVMClosureData(llvm::Function *dynamicCallFn, llvm::Function *staticCallFn,
+                    llvm::Function *strictCallFn,
                     llvm::Value *closure, const std::vector<llvm::Value *> &freeVars)
         : dynamicCallFn(dynamicCallFn),
           staticCallFn(staticCallFn),
+          strictCallFn(strictCallFn),
           closure(closure), freeVars(freeVars.begin(), freeVars.end()) {
           };
     llvm::Function *getDynamicCallFn() { return dynamicCallFn; }
     llvm::Function *getStaticCallFn() { return staticCallFn; }
+    llvm::Function *getStrictCallFn() { return strictCallFn; }
     llvm::Value *getClosure() { return closure; }
 
     unsigned size() const { return freeVars.size(); }
@@ -95,6 +98,7 @@ class LLVMClosureData {
    private:
     llvm::Function *dynamicCallFn;
     llvm::Function *staticCallFn;
+    llvm::Function *strictCallFn;
     llvm::Value *closure;
     FreeVarsTy freeVars;
 };

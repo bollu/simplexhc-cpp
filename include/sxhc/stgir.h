@@ -119,7 +119,7 @@ class TypeRaw {
     enum TypeKind { TK_Data, TK_Function };
     TypeKind getKind() const { return kind; }
     void print(std::ostream &os) const;
-    void dump() { print(std::cerr); }
+    // void __attribute__((used)) dump() const { print(std::cerr); }
 
    protected:
     TypeRaw(TypeKind kind) : kind(kind){};
@@ -172,6 +172,7 @@ class Atom {
 
     AtomKind getKind() const { return kind; }
     virtual void print(std::ostream &os) const = 0;
+    void __attribute__((used)) dump() const { print(std::cerr); }
 
     friend std::ostream &operator<<(std::ostream &os, const Atom &a);
 
