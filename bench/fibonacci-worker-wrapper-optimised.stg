@@ -19,7 +19,7 @@ binding fib = \(a : PrimInt) -> PrimInt {
 };
 
 
-binding main = \() -> Boxed { 
+binding main = \() -> Void { 
     case  fib (40) of
             x -> printInt (x);
 };
