@@ -148,6 +148,7 @@ class Scope {
         if (inner)
             inner.getValue()->insert(k, v);
         else {
+
             assert(m.find(k) == m.end());
             // errs() << "insert " << k << " => " << *v.v << "\n";
             m.insert(std::make_pair(k, v));
@@ -2214,8 +2215,11 @@ LLVMValueData materializeExprStrict(const Expression *e, Module &m, StgIRBuilder
             }
 
 
+            std::stringstream ss;
+            ss << "compute_case_";
+            ss << *ec->getScrutinee();
             Function *CaseF = Function::Create(FunctionType::get(ReturnTy, caseArgTypes, /*isVarArg=*/ false),
-                                               GlobalValue::InternalLinkage, "casefn",
+                                               GlobalValue::InternalLinkage, ss.str(),
                                                &m);
             {
 
@@ -2404,6 +2408,7 @@ void materializeLambdaStrict(const Lambda *l, Function *F, Module &m,
     builder.SetInsertPoint(&F->getEntryBlock());
     assert(l->free_params_size() == 0);
     int i = 0;
+    BuildCtx::Scoper scope(bctx);
     for(Parameter *p : l->bound_params_range()) {
         const StgType *Ty = bctx.getTypeFromRawType(p->getTypeRaw());
         bctx.insertIdentifier(p->getName(), LLVMValueData(F->arg_begin() + i, Ty));
@@ -2476,7 +2481,7 @@ LLVMClosureData materializeEmptyTopLevelStaticBinding(const Binding *b,
     FunctionType *DynamicTy = FunctionType::get(
         builder.getVoidTy(), {builder.getInt8PtrTy()}, /*isVarArg=*/false);
     Function *Dynamic =
-        Function::Create(DynamicTy, GlobalValue::ExternalLinkage, b->getName(), &m);
+        Function::Create(DynamicTy, GlobalValue::ExternalLinkage, b->getName() + "Dynamic", &m);
     Dynamic->addFnAttr(llvm::Attribute::AlwaysInline);
     Dynamic->setCallingConv(CallingConv::Fast);
     // if (b->getName() != "main")
@@ -2519,13 +2524,13 @@ LLVMClosureData materializeEmptyTopLevelStaticBinding(const Binding *b,
     }();
 
     FunctionType *StrictTy = FunctionType::get(StrictRetTy, StrictArgTys, /*isVarArgs=*/false);
-    Function *Strict = Function::Create(StrictTy, GlobalValue::ExternalLinkage, b->getName() + "Strict", &m);
+    Function *Strict = Function::Create(StrictTy, GlobalValue::ExternalLinkage, b->getName(), &m);
 
-    Strict->addFnAttr(llvm::Attribute::AlwaysInline);
+    // Strict->addFnAttr(llvm::Attribute::AlwaysInline);
     Strict->setCallingConv(CallingConv::Fast);
 
-    if (b->getName() != "main")
-        Strict->setLinkage(GlobalValue::InternalLinkage);
+    // if (b->getName() != "main")
+    //     Strict->setLinkage(GlobalValue::InternalLinkage);
 
     return materializeStaticClosure(Dynamic, Static, Strict, b->getName() + "_closure", m,
                                          builder, bctx);
@@ -2721,23 +2726,23 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
             b->getName(), createStgTypeForLambda(b->getRhs(), bctx), cls);
     }
 
-    //for (auto It : bindingToClosure) {
-    //    Function *F = It.second.getDynamicCallFn();
-    //    const Binding *b = It.first;
-    //    BasicBlock *entry = BasicBlock::Create(m->getContext(), "entry", F);
-    //    builder.SetInsertPoint(entry);
-    //    materializeLambdaDynamic(b->getRhs(), *m, builder, bctx);
-    //    builder.CreateRetVoid();
-    //}
+    for (auto It : bindingToClosure) {
+        Function *F = It.second.getDynamicCallFn();
+        const Binding *b = It.first;
+        BasicBlock *entry = BasicBlock::Create(m->getContext(), "entry", F);
+        builder.SetInsertPoint(entry);
+        materializeLambdaDynamic(b->getRhs(), *m, builder, bctx);
+        builder.CreateRetVoid();
+    }
 
-    //for (auto It : bindingToClosure) {
-    //    Function *F = It.second.getStaticCallFn();
-    //    const Binding *b = It.first;
-    //    BasicBlock *entry = BasicBlock::Create(m->getContext(), "entry", F);
-    //    builder.SetInsertPoint(entry);
-    //    materializeLambdaStatic(b->getRhs(), F, *m, builder, bctx);
-    //    builder.CreateRetVoid();
-    // }
+    for (auto It : bindingToClosure) {
+        Function *F = It.second.getStaticCallFn();
+        const Binding *b = It.first;
+        BasicBlock *entry = BasicBlock::Create(m->getContext(), "entry", F);
+        builder.SetInsertPoint(entry);
+        materializeLambdaStatic(b->getRhs(), F, *m, builder, bctx);
+        builder.CreateRetVoid();
+     }
 
 
     for (auto It : bindingToClosure) {
