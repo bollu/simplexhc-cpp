@@ -65,7 +65,8 @@ std::set<Identifier> getFreeVarsInCase(const ExpressionCase *c,
                                        const BuildCtx &bctx);
 
 static const StgType *getTypeOfExpression(const Expression *e,
-                                          const BuildCtx &bctx);
+                                          const StgIRBuilder builder,
+                                          BuildCtx &bctx);
 
 void materializeEnterInt(Value *v, std::string contName, Module &m,
                          StgIRBuilder &builder, BuildCtx &bctx);
@@ -148,7 +149,7 @@ class Scope {
             inner.getValue()->insert(k, v);
         else {
             assert(m.find(k) == m.end());
-            errs() << "insert " << k << " => " << *v.v << "\n";
+            // errs() << "insert " << k << " => " << *v.v << "\n";
             m.insert(std::make_pair(k, v));
         }
     }
@@ -1405,7 +1406,7 @@ void materializeCaseConstructorAltDestructure(const ExpressionCase *c,
 }
 
 
-static const StgType *getCommonDataTypeFromAlts(const ExpressionCase *c, const StgIRBuilder builder, const BuildCtx &bctx) {
+static const StgType *getCommonDataTypeFromAlts(const ExpressionCase *c, const StgIRBuilder builder, BuildCtx &bctx) {
     const StgType *commondecl = nullptr;
     auto setCommonType = [&](const StgType *newdecl) -> void {
         if (commondecl == nullptr) {
@@ -1424,10 +1425,17 @@ static const StgType *getCommonDataTypeFromAlts(const ExpressionCase *c, const S
             setCommonType(bctx.getTypeFromName(dc->getParent()->getTypeName()));
         } else if (isa<CaseAltInt>(a)) {
             setCommonType(bctx.getPrimIntTy());
-        } else if (isa<CaseAltVariable>(a)) {
-            setCommonType(getTypeOfExpression(c->getScrutinee(), bctx));
-        } else if (isa<CaseAltDefault>(a)){
-            setCommonType(bctx.getVoidTy());
+        } else if (CaseAltVariable *cv = dyn_cast<CaseAltVariable>(a)) {
+            // TODO: remove this ugly mutation that is needed.
+            // At this point, we have a *type* for the case alt variable, but not the type :(
+            // Do this behind a scoper so that we can compute the type and then discard this binding.
+            BuildCtx::Scoper s(bctx);
+            const StgType *scrutineeTy = getTypeOfExpression(c->getScrutinee(), builder, bctx);
+            LLVMValueData scrutineeData(nullptr, scrutineeTy);
+            bctx.insertIdentifier(cv->getLHS(), scrutineeData);
+            setCommonType(getTypeOfExpression(cv->getRHS(), builder, bctx));
+        } else if (CaseAltDefault *cd = dyn_cast<CaseAltDefault>(a)){
+            setCommonType(getTypeOfExpression(cd->getRHS(), builder, bctx));
         }
         else {
             assert(false && "unknown case alt.");
@@ -1547,7 +1555,7 @@ Function *materializeCaseConstructorReturnFrame(
                 // TODO: copy checks from generate prim int to here.
                 switch_->setDefaultDest(bb);
                 const StgType *ty =
-                    getTypeOfExpression(c->getScrutinee(), bctx);
+                    getTypeOfExpression(c->getScrutinee(), builder, bctx);
                 BuildCtx::Scoper s(bctx);
                 bctx.insertIdentifier(altVariable->getLHS(),
                                       LLVMValueData(rawmem, ty));
@@ -1680,7 +1688,8 @@ Function *materializePrimitiveCaseReturnFrame(
 }
 
 static const StgType *getTypeOfExpression(const Expression *e,
-                                          const BuildCtx &bctx) {
+                                          const StgIRBuilder builder,
+                                          BuildCtx &bctx) {
     switch (e->getKind()) {
         case Expression::EK_Ap: {
             const ExpressionAp *ap = cast<ExpressionAp>(e);
@@ -1696,11 +1705,17 @@ static const StgType *getTypeOfExpression(const Expression *e,
             return bctx.getPrimIntTy();
             break;
         }
-        case Expression::EK_Case:
+
+        case Expression::EK_Case: {
+            return getCommonDataTypeFromAlts(cast<ExpressionCase>(e), builder, bctx);
+            break;
+        }
+
         case Expression::EK_Cons:
-        case Expression::EK_Let:
-            report_fatal_error("foo");
+        case Expression::EK_Let: {
+            std::cerr << "expr: " << *e << "\n";
             assert(false && "unimplemented getTypeOfExpression");
+        }
     }
     assert(false && "unreachable");
 }
@@ -1837,7 +1852,7 @@ void materializeCase(const ExpressionCase *c, Module &m, StgIRBuilder &builder,
     }();
 
     const Expression *scrutinee = c->getScrutinee();
-    const StgType *scrutineety = getTypeOfExpression(scrutinee, bctx);
+    const StgType *scrutineety = getTypeOfExpression(scrutinee, builder,  bctx);
 
     Function *continuation = [&] {
         if (bctx.getPrimIntTy() == scrutineety) {
@@ -2159,99 +2174,123 @@ LLVMValueData materializeExprStrict(const Expression *e, Module &m, StgIRBuilder
         }
         case Expression::EK_Case: {
             const ExpressionCase *ec = cast<ExpressionCase>(e);
-            LLVMValueData scrutinee = materializeExprStrict(ec->getScrutinee(), m, builder, bctx);
-
-            if (const CaseAltDefault *ad = ec->getDefaultAlt()) {
-                materializeExprStrict(ad->getRHS(), m, builder, bctx);
-
-            }
             BasicBlock *focusedBB = builder.GetInsertBlock();
 
-            BasicBlock *defaultBB = BasicBlock::Create(builder.getContext(), "case_default",
-                                                       builder.GetInsertBlock()->getParent());
+            const StgType *scrutineeType = getTypeOfExpression(ec->getScrutinee(), builder, bctx);
+            assert(scrutineeType == bctx.getPrimIntTy());
 
-            SwitchInst *switchInst = builder.CreateSwitch(scrutinee.v, defaultBB, ec->alts_size());
-            BasicBlock *mergeBB = BasicBlock::Create(builder.getContext(), "case_merge", builder.GetInsertBlock()->getParent());
+            const StgType *CommonAltsType = getCommonDataTypeFromAlts(ec, builder, bctx);
+            Type *ReturnTy = [&]() -> Type * {
+                if (CommonAltsType == bctx.getVoidTy()) {
+                    return builder.getVoidTy();
+                } else {
+                    assert(CommonAltsType == bctx.getPrimIntTy());
+                    return builder.getInt64Ty();
+                }
 
-
-            const StgType *CommonType = getCommonDataTypeFromAlts(ec, builder, bctx);
-            // llvm::Type *Ty = builder.getInt64Ty(); // HACK
-            PHINode *mergePHI = [&] () -> PHINode* {
-                if (CommonType == bctx.getVoidTy()) {
-                    return nullptr;
-                }
-                else if (CommonType == bctx.getPrimIntTy()) {
-                    return PHINode::Create(builder.getInt64Ty(), ec->alts_size(), "merge", mergeBB);
-                }
-                else {
-                    report_fatal_error("unhandled type.");
-                }
             }();
+            Function *CaseF = Function::Create(FunctionType::get(ReturnTy, {builder.getInt64Ty()}, /*isVarArg=*/ false),
+                                               GlobalValue::InternalLinkage, "casefn",
+                                               &m);
+            {
+
+                BasicBlock *Entry = BasicBlock::Create(builder.getContext(), "entry", CaseF);
+                builder.SetInsertPoint(Entry);
+
+                BasicBlock *defaultBB = BasicBlock::Create(builder.getContext(), "case_default",
+                                                           CaseF);
+
+                Value *scrutineeArg = CaseF->arg_begin();
+                SwitchInst *switchInst = builder.CreateSwitch(scrutineeArg, defaultBB, ec->alts_size());
+                BasicBlock *mergeBB = BasicBlock::Create(builder.getContext(), "case_merge",
+                                                         CaseF);
 
 
-            if (const CaseAltVariable *av = ec->getVariableAlt()) {
-                BuildCtx::Scoper childScope(bctx);
-                // the scrutinee is the alt label.
-                bctx.insertIdentifier(av->getLHS(), scrutinee);
-                builder.SetInsertPoint(defaultBB);
-                LLVMValueData V = materializeExprStrict(av->getRHS(), m, builder, bctx);
-                errs() << "mergePHI: " << *mergePHI << "\n";
-                errs() << "V.v: " << *V.v << "\n";
+                // llvm::Type *Ty = builder.getInt64Ty(); // HACK
+                AllocaInst *mergePHI = [&]() -> AllocaInst * {
+                    static int count = 7;
+                    if (CommonAltsType == bctx.getVoidTy()) {
+                        return nullptr;
+                    } else if (CommonAltsType == bctx.getPrimIntTy()) {
+                        AllocaInst *AI = new AllocaInst(builder.getInt64Ty(), 0, "merge." + std::to_string(count));
+                        CaseF->getEntryBlock().getInstList().push_front(AI);
+                        count += 10;
+                        return AI;
+                    } else {
+                        report_fatal_error("unhandled type.");
+                    }
+                }();
 
-                if (V.stgtype != bctx.getVoidTy()) {
-                    assert(mergePHI);
-                    mergePHI->addIncoming(V.v, defaultBB);
+
+                if (const CaseAltVariable *av = ec->getVariableAlt()) {
+                    BuildCtx::Scoper childScope(bctx);
+                    // the scrutinee is the alt label.
+                    bctx.insertIdentifier(av->getLHS(), LLVMValueData(scrutineeArg, scrutineeType));
+                    builder.SetInsertPoint(defaultBB);
+                    LLVMValueData V = materializeExprStrict(av->getRHS(), m, builder, bctx);
+
+                    if (V.stgtype != bctx.getVoidTy()) {
+                        assert(mergePHI);
+                        builder.CreateStore(V.v, mergePHI);
+                    }
+                    builder.SetInsertPoint(defaultBB);
+                    builder.CreateBr(mergeBB);
+                } else if (ec->getDefaultAlt()) {
+                    // in case of default, de
+                    builder.SetInsertPoint(defaultBB);
+                    LLVMValueData V = materializeExprStrict(av->getRHS(), m, builder, bctx);
+                    if (V.stgtype != bctx.getVoidTy()) {
+                        assert(mergePHI);
+                        builder.CreateStore(V.v, mergePHI);
+                    }
+                    builder.CreateBr(mergeBB);
+                } else {
+                    builder.SetInsertPoint(defaultBB);
+                    sxhc::RuntimeDebugBuilder::createCPUPrinter(
+                            builder, "Non exhaustive patterns in case", scrutineeArg, "\n");
+                    Function *trap = getOrCreateFunction(
+                            m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
+                    builder.CreateCall(trap);
+                    builder.SetInsertPoint(defaultBB);
+                    builder.CreateBr(mergeBB);
                 }
-                builder.CreateBr(mergeBB);
-                builder.SetInsertPoint(focusedBB);
-            }
-            else if (ec->getDefaultAlt()) {
-                builder.SetInsertPoint(defaultBB);
-                LLVMValueData V = materializeExprStrict(av->getRHS(), m, builder, bctx);
+                for (const CaseAlt *ca : ec->alts_range()) {
+                    // already handled.
+                    if (isa<CaseAltVariable>(ca)) continue;
+                    if (isa<CaseAltDefault>(ca)) continue;
+                    const CaseAltInt *ci = cast<CaseAltInt>(ca);
 
-                if (V.stgtype != bctx.getVoidTy()) {
-                    assert(mergePHI);
-                    mergePHI->addIncoming(V.v, defaultBB);
+                    BasicBlock *caseBB = BasicBlock::Create(builder.getContext(), "", CaseF);
+                    switchInst->addCase(builder.getInt64(ci->getLHS()), caseBB);
+                    builder.SetInsertPoint(caseBB);
+                    LLVMValueData vd = materializeExprStrict(ci->getRHS(), m, builder, bctx);
+                    if (vd.stgtype != bctx.getVoidTy()) {
+                        assert(mergePHI);
+                        builder.CreateStore(vd.v, mergePHI);
+                        //mergePHI->addIncoming(vd.v, caseBB);
+                    }
+                    builder.SetInsertPoint(caseBB);
+                    builder.CreateBr(mergeBB);
                 }
 
-                builder.CreateBr(mergeBB);
-                builder.SetInsertPoint (focusedBB);
-            }
-            else {
-                builder.SetInsertPoint(defaultBB);
-                sxhc::RuntimeDebugBuilder::createCPUPrinter(
-                        builder, "Non exhaustive patterns in case", scrutinee.v, "\n");
-                Function *trap = getOrCreateFunction(
-                        m, FunctionType::get(builder.getVoidTy(), {}), "llvm.trap");
-                builder.CreateCall(trap);
+                builder.SetInsertPoint(mergeBB);
                 if (mergePHI) {
-                    mergePHI->addIncoming(UndefValue::get(mergePHI->getType()), defaultBB);
+                    Value *mergeVal = builder.CreateLoad(mergePHI);
+                    builder.CreateRet(mergeVal);
+                    // Output of case is this merge phi.
+                } else {
+                    builder.CreateRetVoid();
                 }
-                builder.CreateBr(mergeBB);
-                builder.SetInsertPoint (focusedBB);
             }
 
-            for (const CaseAlt *ca : ec->alts_range()) {
-                // already handled.
-                if (isa<CaseAltVariable>(ca)) continue;
-                if (isa<CaseAltDefault>(ca)) continue;
-                const CaseAltInt *ci = cast<CaseAltInt>(ca);
-
-                BasicBlock *caseBB = BasicBlock::Create(builder.getContext(), "", focusedBB->getParent());
-                switchInst->addCase(builder.getInt64(ci->getLHS()), caseBB);
-                builder.SetInsertPoint(caseBB);
-                LLVMValueData vd = materializeExprStrict(ci->getRHS(), m, builder, bctx);
-                if (vd.stgtype != bctx.getVoidTy()) {
-                    assert(mergePHI);
-                    mergePHI->addIncoming(vd.v, caseBB);
-                }
-                builder.CreateBr(mergeBB);
-                builder.SetInsertPoint(focusedBB);
+            builder.SetInsertPoint(focusedBB);
+            LLVMValueData scrutineeValData = materializeExprStrict(ec->getScrutinee(), m, builder, bctx);
+            Value *caseVal = builder.CreateCall(CaseF, scrutineeValData.v);
+            if (CommonAltsType == bctx.getVoidTy()) {
+                return LLVMValueData(nullptr, bctx.getVoidTy());
+            } else {
+                return LLVMValueData(caseVal, CommonAltsType);
             }
-
-            builder.SetInsertPoint(mergeBB);
-            // Output of case is this merge phi.
-            return LLVMValueData(mergePHI, CommonType);
             break;
         }
         case Expression::EK_Let:
