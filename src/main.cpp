@@ -2189,7 +2189,32 @@ LLVMValueData materializeExprStrict(const Expression *e, Module &m, StgIRBuilder
                 }
 
             }();
-            Function *CaseF = Function::Create(FunctionType::get(ReturnTy, {builder.getInt64Ty()}, /*isVarArg=*/ false),
+
+
+            const std::map<Identifier, LLVMValueData> freeVarsInAlts = [&]() {
+                // Collect all free variables in the alternates.
+                std::set<Identifier> ids =
+                        getFreeVarsInExpression(ec, bctx.getTopLevelBindings());
+
+                std::map<Identifier, LLVMValueData> m;
+                for (Identifier id : ids) {
+                    assert(m.find(id) == m.end());
+                    m.insert(std::make_pair(id, bctx.getIdentifier(id)));
+                }
+
+                return m;
+            }();
+
+            SmallVector<Type *, 4> caseArgTypes;
+            caseArgTypes.push_back(builder.getInt64Ty());
+            for(auto it: freeVarsInAlts) {
+                const LLVMValueData vd = it.second;
+                assert(vd.stgtype == bctx.getPrimIntTy());
+                caseArgTypes.push_back(builder.getInt64Ty());
+            }
+
+
+            Function *CaseF = Function::Create(FunctionType::get(ReturnTy, caseArgTypes, /*isVarArg=*/ false),
                                                GlobalValue::InternalLinkage, "casefn",
                                                &m);
             {
@@ -2201,6 +2226,20 @@ LLVMValueData materializeExprStrict(const Expression *e, Module &m, StgIRBuilder
                                                            CaseF);
 
                 Value *scrutineeArg = CaseF->arg_begin();
+                scrutineeArg->setName("scrutinee");
+
+                // bind free vars of alts;
+                BuildCtx::Scoper scoper(bctx);
+                {
+                    auto Arg = CaseF->arg_begin() + 1;
+                    for (auto it : freeVarsInAlts) {
+                        const Identifier name = it.first;
+                        const LLVMValueData vd = it.second;
+                        bctx.insertIdentifier(name, LLVMValueData(Arg, vd.stgtype));
+                        Arg->setName(name);
+                        Arg++;
+                    }
+                }
                 SwitchInst *switchInst = builder.CreateSwitch(scrutineeArg, defaultBB, ec->alts_size());
                 BasicBlock *mergeBB = BasicBlock::Create(builder.getContext(), "case_merge",
                                                          CaseF);
@@ -2285,7 +2324,13 @@ LLVMValueData materializeExprStrict(const Expression *e, Module &m, StgIRBuilder
 
             builder.SetInsertPoint(focusedBB);
             LLVMValueData scrutineeValData = materializeExprStrict(ec->getScrutinee(), m, builder, bctx);
-            Value *caseVal = builder.CreateCall(CaseF, scrutineeValData.v);
+            SmallVector<Value *, 4> callParams;
+            callParams.push_back(scrutineeValData.v);
+            for(auto it : freeVarsInAlts) {
+                const LLVMValueData vd = it.second;
+                callParams.push_back(vd.v);
+            }
+            Value *caseVal = builder.CreateCall(CaseF, callParams);
             if (CommonAltsType == bctx.getVoidTy()) {
                 return LLVMValueData(nullptr, bctx.getVoidTy());
             } else {
