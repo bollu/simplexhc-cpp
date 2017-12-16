@@ -19,7 +19,7 @@ binding ackerman = \(aint: PrimInt, bint: PrimInt) -> PrimInt {
 };
 
 
-binding main = \() -> Boxed { 
+binding main = \() -> Void { 
     case ackerman (3 11) of
         x -> printInt (x); 
 };
