@@ -2202,7 +2202,7 @@ void materializeLambdaDynamic(const Lambda *l, Module &m, StgIRBuilder &builder,
                               BuildCtx &bctx) {
     Function *F = builder.GetInsertBlock()->getParent();
     assert(F);
-    F->dump();
+    // F->dump();
 
     BuildCtx::Scoper scoper(bctx);
     for (const Parameter *p : l->bound_params_range()) {
