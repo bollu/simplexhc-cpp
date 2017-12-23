@@ -14,7 +14,7 @@ find_package(Boost REQUIRED)
 llvm_map_components_to_libnames(LLVM_LIBS AllTargetsAsmPrinters 
     AllTargetsAsmParsers Core Support ORCJIT MCJIT ExecutionEngine
     ASMPrinter CodeGen AllTargetsDescs AllTargetsInfos TransformUtils Object
-    NVPTXCodeGen ipo Passes Analysis
+    ipo Passes Analysis
     nativecodegen MC)
 
 # FLEX AND BISON
