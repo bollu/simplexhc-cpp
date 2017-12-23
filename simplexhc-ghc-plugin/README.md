@@ -1,1 +1,0 @@
-# simplexhc-ghc-plugin
