@@ -11,7 +11,7 @@ binding factorial = \(a : PrimInt) -> PrimInt {
 };
 
 
-binding main = \() -> Boxed { 
+binding main = \() -> Void { 
     case  factorial (20) of
             x -> printInt (x);
 };

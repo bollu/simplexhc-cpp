@@ -6,20 +6,31 @@
 # ack a 0 = ack (a - 1) 1
 # ack a b = ack (a - 1) (ack a (b - 1))
 
+ #binding ackerman = \(aint: PrimInt, bint: PrimInt) -> PrimInt {
+ #    case aint () of
+ #            0 -> primAdd (bint 1);
+ #            aval -> case bint () of
+ #                0 -> case primSubtract (aval 1) of
+ #                        adec -> ackerman (adec 1);;
+ #                bval -> case primSubtract (bval 1) of
+ #                            bdec -> case primSubtract (aval 1) of
+ #                                        adec -> case ackerman (aval bdec) of
+ #                                                    bnew -> ackerman (adec bnew);;;;;
+ #};
+ #
 binding ackerman = \(aint: PrimInt, bint: PrimInt) -> PrimInt {
     case aint () of
             0 -> primAdd (bint 1);
-            aval -> case bint () of
-                0 -> case primSubtract (aval 1) of
-                        adec -> ackerman (adec 1);;
-                bval -> case primSubtract (bval 1) of
-                            bdec -> case primSubtract (aval 1) of
-                                        adec -> case ackerman (aval bdec) of
+            aval -> case primSubtract (aval 1) of
+                        adec ->  case bint () of
+                                    0 -> ackerman (adec 1);
+                                    bval -> case primSubtract (bval 1) of
+                                                bdec -> case ackerman (aval bdec) of
                                                     bnew -> ackerman (adec bnew);;;;;
 };
 
 
-binding main = \() -> Boxed { 
-    case ackerman (3 11) of
+binding main = \() -> Void { 
+    case ackerman (3 13) of
         x -> printInt (x); 
 };

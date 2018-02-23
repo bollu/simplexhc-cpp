@@ -1,0 +1,5 @@
+namespace sxhc {
+    namespace LazyCodegen {
+
+    }
+}
