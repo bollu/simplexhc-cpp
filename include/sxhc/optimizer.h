@@ -243,7 +243,7 @@ class SinkPushPass : public PassInfoMixin<SinkPushPass<stackName>> {
             if (!isInstPush(I, stackname)) continue;
             CallInst *CI = cast<CallInst>(I);
             // we fond a push
-            getMatchingPops(stackname, CurBB, it, CI, matchedPops, Visited);
+            getMatchingPops(stackname.c_str(), CurBB, it, CI, matchedPops, Visited);
             return;
         }
         // no pushes found
