@@ -12,11 +12,9 @@ find_package(LLVM REQUIRED)
 find_package(Boost REQUIRED)
 # HACK: I'm using all. I need to ask on the mailing list how to fix this.
 
-llvm_map_components_to_libnames(LLVM_LIBS   Target
+llvm_map_components_to_libnames(LLVM_LIBS Target
      Core Support ORCJIT MCJIT ExecutionEngine
-    NVPTXDesc
-    NVPTXAsmPrinter
-    NVPTXCodeGen 
+    ${LLVM_TARGETS_TO_BUILD}
     ASMPrinter
     CodeGen
     AllTargetsAsmParsers
