@@ -2615,7 +2615,10 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         errs() << "---------\n";
         errs() << "JIT: executing module:\n";
         SimpleJIT jit;
-        jit.addModule(CloneModule(m.get()));
+
+        // NOTE: I don't *atually* want to move the damn module, wtf
+        assert(false && "Moving the module, how do I clone the module?");
+        jit.addModule(llvm::CloneModule(*m));
         Expected<JITTargetAddress> memConstructor =
             jit.findSymbol("init_rawmem_constructor").getAddress();
         if (!memConstructor) {
