@@ -11,11 +11,26 @@ find_package(LLVM REQUIRED)
 # Boost
 find_package(Boost REQUIRED)
 # HACK: I'm using all. I need to ask on the mailing list how to fix this.
-llvm_map_components_to_libnames(LLVM_LIBS AllTargetsAsmPrinters 
-    AllTargetsAsmParsers Core Support ORCJIT MCJIT ExecutionEngine
-    ASMPrinter CodeGen AllTargetsDescs AllTargetsInfos TransformUtils Object
+
+llvm_map_components_to_libnames(LLVM_LIBS   Target
+     Core Support ORCJIT MCJIT ExecutionEngine
+    NVPTXDesc
+    NVPTXAsmPrinter
+    NVPTXCodeGen 
+    ASMPrinter
+    CodeGen
+    AllTargetsAsmParsers
+    AllTargetsAsmPrinters
+    AllTargetsDescs
+    AllTargetsInfos TransformUtils Object
     ipo Passes Analysis
     nativecodegen MC)
+
+#llvm_map_components_to_libnames(LLVM_LIBS AllTargetsAsmPrinters 
+#    AllTargetsAsmParsers Core Support ORCJIT MCJIT ExecutionEngine
+#    ASMPrinter CodeGen AllTargetsDescs AllTargetsInfos TransformUtils Object
+#    ipo Passes Analysis
+#    nativecodegen MC)
 
 # FLEX AND BISON
 find_package(BISON)
