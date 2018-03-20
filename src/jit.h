@@ -45,14 +45,34 @@ class SimpleJIT {
     SimpleJIT()
         : ES(SSP),
         Resolver(createLegacyLookupResolver(
-                    [this](const std::string &Name) {
-                    return ObjectLayer.findSymbol(Name, true);
+                    [this](const std::string &Name) -> JITSymbol {
+
+
+                    if (Name == "printOnlyInt")
+                    return JITSymbol((JITTargetAddress)&printOnlyInt, JITSymbolFlags::Exported);
+
+                    if (auto Sym = CompileLayer.findSymbol(Name, false)) {
+                    return Sym;
+                    } else if (auto Err = Sym.takeError()) {
+                    errs() << "LOOKING FOR: " << Name << ":" << __LINE__ << "\n";
+                    assert(false);
+                    return std::move(Err);
+                    }
+                    if (auto SymAddr =
+                            RTDyldMemoryManager::getSymbolAddressInProcess(Name)) {
+                    return JITSymbol(SymAddr, JITSymbolFlags::Exported);
+                    }
+
+
+                    errs() << "LOOKING FOR: " << Name << ":" << __LINE__ << "\n";
+                    assert(false);
+                    return nullptr;
                     },
                     [](Error Err) { cantFail(std::move(Err), "lookupFlags failed"); })),
         TM(EngineBuilder().selectTarget()), DL(TM->createDataLayout()),
         ObjectLayer(ES,
                 [this](VModuleKey) {
-                return ObjLayerT::Resources{
+                return RTDyldObjectLinkingLayer::Resources{
                 std::make_shared<SectionMemoryManager>(), Resolver};
                 }),
         CompileLayer(ObjectLayer, SimpleCompiler(*TM)) {

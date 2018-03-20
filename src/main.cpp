@@ -2562,6 +2562,27 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         exit(1);
     }
 
+
+    // Setup for codegen
+    const std::string CPU = "generic";
+    auto TargetTriple = sys::getDefaultTargetTriple();
+    std::string Error;
+    auto Target = TargetRegistry::lookupTarget(TargetTriple, Error);
+    if (!Target) {
+        errs() << Error;
+        report_fatal_error("unable to lookup target");
+    }
+
+    TargetOptions opt;
+    auto RM = Optional<Reloc::Model>();
+    const std::string Features = "";
+    llvm::TargetMachine *TM = Target->createTargetMachine(
+            TargetTriple, CPU, Features, opt, RM);
+    m->setDataLayout(TM->createDataLayout());
+
+
+
+
     std::error_code errcode;
     llvm::raw_fd_ostream outputFile(OPTION_OUTPUT_FILENAME, errcode,
                                     llvm::sys::fs::F_None);
@@ -2584,22 +2605,6 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
             errs() << "To print LLVM IR, use --emit-llvm. To print assembly, "
                       "use --emit-asm\n";
         } else {
-            const std::string CPU = "generic";
-            auto TargetTriple = sys::getDefaultTargetTriple();
-            std::string Error;
-            auto Target = TargetRegistry::lookupTarget(TargetTriple, Error);
-            if (!Target) {
-                errs() << Error;
-                report_fatal_error("unable to lookup target");
-            }
-
-            TargetOptions opt;
-            auto RM = Optional<Reloc::Model>();
-            const std::string Features = "";
-            llvm::TargetMachine *TM = Target->createTargetMachine(
-                TargetTriple, CPU, Features, opt, RM);
-            m->setDataLayout(TM->createDataLayout());
-
             legacy::PassManager PM;
             if (TM->addPassesToEmitFile(PM, outputFile,
                                         OPTION_CODEGEN_FILE_TYPE)) {
@@ -2617,7 +2622,7 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         SimpleJIT jit;
 
         // NOTE: I don't *atually* want to move the damn module, wtf
-        assert(false && "Moving the module, how do I clone the module?");
+        // assert(false && "Moving the module, how do I clone the module?");
         jit.addModule(llvm::CloneModule(*m));
         Expected<JITTargetAddress> memConstructor =
             jit.findSymbol("init_rawmem_constructor").getAddress();
