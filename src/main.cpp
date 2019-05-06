@@ -2606,7 +2606,7 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
                       "use --emit-asm\n";
         } else {
             legacy::PassManager PM;
-            if (TM->addPassesToEmitFile(PM, outputFile,
+            if (TM->addPassesToEmitFile(PM, outputFile, nullptr,
                                         OPTION_CODEGEN_FILE_TYPE)) {
                 report_fatal_error(
                     "Target machine can't emit a file of this type.");

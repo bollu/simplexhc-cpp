@@ -25,26 +25,31 @@ using namespace orc;
 using namespace llvm::orc;
 class SimpleJIT {
     std::vector<VModuleKey> ModuleKeys;
-    SymbolStringPool SSP;
+    // SymbolStringPool SSP;
     ExecutionSession ES;
 
     std::shared_ptr<SymbolResolver> Resolver;
+    // std::shared_ptr<llvm::orc::LegacyLookupFnResolver<llvm::LegacyLookupFn>> Resolver;
 
-    using ObjLayerT = llvm::orc::RTDyldObjectLinkingLayer;                                   
-    using CompileLayerT = llvm::orc::IRCompileLayer<ObjLayerT, llvm::orc::SimpleCompiler>;              
+    using ObjLayerT = llvm::orc::RTDyldObjectLinkingLayer;
+    using CompileLayerT = llvm::orc::IRCompileLayer<ObjLayerT, llvm::orc::SimpleCompiler>;
 
 
-    std::shared_ptr<TargetMachine> TM;
+    std::unique_ptr<TargetMachine> TM;
     const DataLayout DL;
 
 
     ObjLayerT ObjectLayer;
     CompileLayerT CompileLayer;
 
+    // using OptimizeFunction =
+    //     std::function<std::unique_ptr<Module>(std::unique_ptr<Module>)>;
+
+    // IRTransformLayer<decltype(CompileLayer), OptimizeFunction> OptimizeLayer;
+
     public:
-    SimpleJIT()
-        : ES(SSP),
-        Resolver(createLegacyLookupResolver(
+    SimpleJIT() :
+        Resolver(createLegacyLookupResolver(ES,
                     [this](const std::string &Name) -> JITSymbol {
 
 
