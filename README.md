@@ -82,6 +82,17 @@ haskell compilers that are cleanly designed, so I can learn.
 - Mark `@alloc` as pure so that the optimiser can safely remove them.
 - Understand what screws up when I allow my stack simulator pass to run on BBs with unique predecessors.
 
+# Autocompletion / tooling
+I use vim with `YouCompleteMe`. To enable this, setup `YouCompleteMe` with
+the clang plugin. To generate autocomplete information, invoke:
+
+```
+$ cmake /path/to/simplexhc-cpp -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+$ cp compile_commands.json /path/to/simplexhc/cpp
+```
+
+The `compile_commands.json` file contains autocomplete information.
+
 # References
  - [Implementing functional languages on stock hardware: the spineless, tagless, G machine](https://www.dcc.fc.up.pt/~pbv/aulas/linguagens/peytonjones92implementing.pdf)
  - [Making a fast curry, Push/Enter versus Eval/Apply](http://www.cs.tufts.edu/~nr/cs257/archive/simon-peyton-jones/eval-apply-jfp.pdf)
