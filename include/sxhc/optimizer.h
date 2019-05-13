@@ -137,7 +137,7 @@ class StackMatcherPass : public PassInfoMixin<StackMatcherPass<stackName>> {
 
                 // add the match.
                 matches.push_back(PushPopMatch(push, SI));
-                
+
             }
 
         }
@@ -250,7 +250,7 @@ class SinkPushPass : public PassInfoMixin<SinkPushPass<stackName>> {
         Visited.insert(CurBB);
 
         // BB had no pops.
-        const TerminatorInst *TI = CurBB->getTerminator();
+        const Instruction *TI = CurBB->getTerminator();
         assert(TI && "BB has no terminator!");
         for (unsigned i = 0; i < TI->getNumSuccessors(); i++) {
             BasicBlock *Next = TI->getSuccessor(i);
@@ -282,7 +282,7 @@ class SinkPushPass : public PassInfoMixin<SinkPushPass<stackName>> {
         Visited.insert(CurBB);
 
         // BB had no pops.
-        const TerminatorInst *TI = CurBB->getTerminator();
+        const Instruction *TI = CurBB->getTerminator();
         assert(TI && "BB has no terminator!");
         for (unsigned i = 0; i < TI->getNumSuccessors(); i++) {
             BasicBlock *Next = TI->getSuccessor(i);
