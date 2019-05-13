@@ -2619,13 +2619,13 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
     if (OPTION_JIT) {
         errs() << "---------\n";
         errs() << "JIT: executing module:\n";
-        SimpleJIT jit;
+        std::unique_ptr<SimpleJIT> jit = std::move(SimpleJIT::Create().get());
 
         // NOTE: I don't *atually* want to move the damn module, wtf
         // assert(false && "Moving the module, how do I clone the module?");
-        jit.addModule(llvm::CloneModule(*m));
+        jit->addModule(llvm::CloneModule(*m));
         Expected<JITTargetAddress> memConstructor =
-            jit.findSymbol("init_rawmem_constructor").getAddress();
+            jit->lookup("init_rawmem_constructor").get().getAddress();
         if (!memConstructor) {
             errs() << "unable to find `init_rawmem_constructor` in given "
                       "module:\n";
@@ -2638,7 +2638,7 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
         rawmemConstructor();
 
         Expected<JITTargetAddress> maybeMain =
-            jit.findSymbol("main").getAddress();
+            jit->lookup("main").get().getAddress();
         if (!maybeMain) {
             errs() << "unable to find `main` in given module:\n";
             m->print(outs(), nullptr);
