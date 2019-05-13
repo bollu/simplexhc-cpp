@@ -94,6 +94,7 @@ $ cp compile_commands.json /path/to/simplexhc/cpp
 The `compile_commands.json` file contains autocomplete information.
 
 # References
+ - [llvm 8.0 documentation](http://releases.llvm.org/8.0.0/docs/index.html)
  - [Implementing functional languages on stock hardware: the spineless, tagless, G machine](https://www.dcc.fc.up.pt/~pbv/aulas/linguagens/peytonjones92implementing.pdf)
  - [Making a fast curry, Push/Enter versus Eval/Apply](http://www.cs.tufts.edu/~nr/cs257/archive/simon-peyton-jones/eval-apply-jfp.pdf)
  - [GRIN - Whole program optimisation for lazy functional languages](http://web.archive.org/web/20080506021638/http://www.cs.chalmers.se:80/~boquist/phd/index.html)
