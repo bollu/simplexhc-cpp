@@ -6,6 +6,6 @@ in
   pkgs.stdenv.mkDerivation {
     name = "simplexhc-1.0.0";
     src = ./.;
-    buildInputs = [ pkgs.cmake pkgs.flex pkgs.bison pkgs.boost pkgs.llvm
+    buildInputs = [ pkgs.cmake pkgs.flex pkgs.bison pkgs.boost pkgs.llvm_8
     pkgs.doxygen pkgs.graphviz];
   }
