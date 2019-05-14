@@ -2619,17 +2619,17 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
     if (OPTION_JIT) {
         errs() << "---------\n";
         errs() << "JIT: executing module:\n";
-        printOnlyInt(42); // call the function so it gets linked in.
         llvm::sys::DynamicLibrary::LoadLibraryPermanently(nullptr);
 
         std::unique_ptr<SimpleJIT> jit = std::move(SimpleJIT::Create().get());
+        llvm::sys::DynamicLibrary::LoadLibraryPermanently(nullptr);
 
         // NOTE: I don't *atually* want to move the damn module, wtf
         // assert(false && "Moving the module, how do I clone the module?");
         jit->addModule(llvm::CloneModule(*m));
 
         Expected<JITEvaluatedSymbol> memConstructor =
-            jit->lookup("popReturn");
+            jit->lookup("init_rawmem_constructor");
         // if (!memConstructor) {
         //     m->print(errs(), nullptr);
         //     errs() << "unable to find `init_rawmem_constructor` in given "
