@@ -46,12 +46,11 @@ add_executable(sxhc
     src/RuntimeDebugBuilder.cpp
     src/stgir.cpp
     src/StackAnalysis.cpp
-    lib/libstg.c
     ${BISON_Parser_OUTPUTS}
     ${FLEX_Lexer_OUTPUTS}
     )
 
-target_link_libraries(sxhc ${LLVM_LIBS}  -lstdc++)
+target_link_libraries(sxhc ${LLVM_LIBS}  -lstdc++ stgruntime)
 set_target_properties(sxhc PROPERTIES CXX_STANDARD 14)
 
 # CLANG FORMAT

@@ -2619,22 +2619,26 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
     if (OPTION_JIT) {
         errs() << "---------\n";
         errs() << "JIT: executing module:\n";
+        printOnlyInt(42); // call the function so it gets linked in.
+        llvm::sys::DynamicLibrary::LoadLibraryPermanently(nullptr);
+
         std::unique_ptr<SimpleJIT> jit = std::move(SimpleJIT::Create().get());
 
         // NOTE: I don't *atually* want to move the damn module, wtf
         // assert(false && "Moving the module, how do I clone the module?");
         jit->addModule(llvm::CloneModule(*m));
-        Expected<JITTargetAddress> memConstructor =
-            jit->lookup("init_rawmem_constructor").get().getAddress();
-        if (!memConstructor) {
-            errs() << "unable to find `init_rawmem_constructor` in given "
-                      "module:\n";
-            m->print(outs(), nullptr);
-            exit(1);
-        };
+
+        Expected<JITEvaluatedSymbol> memConstructor =
+            jit->lookup("popReturn");
+        // if (!memConstructor) {
+        //     m->print(errs(), nullptr);
+        //     errs() << "unable to find `init_rawmem_constructor` in given "
+        //               "module:^\n";
+        //     exit(1);
+        // };
 
         SimplexhcInitRawmemConstructorTy rawmemConstructor =
-            (SimplexhcInitRawmemConstructorTy)memConstructor.get();
+            (SimplexhcInitRawmemConstructorTy)(memConstructor.get().getAddress());
         rawmemConstructor();
 
         Expected<JITTargetAddress> maybeMain =
@@ -2644,6 +2648,7 @@ int compile_program(stg::Program *program, cxxopts::Options &opts) {
             m->print(outs(), nullptr);
             exit(1);
         }
+
         SimplexhcMainTy main = (SimplexhcMainTy)maybeMain.get();
         std::cout.flush();
         main();

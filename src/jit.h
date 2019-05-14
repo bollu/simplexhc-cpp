@@ -68,7 +68,8 @@ public:
   LLVMContext &getContext() { return *Ctx.getContext(); }
 
   Error addModule(std::unique_ptr<Module> M) {
-    return CompileLayer.add(ES.getMainJITDylib(),
+    auto &MainDL = ES.getMainJITDylib();
+    return CompileLayer.add(MainDL,
                             ThreadSafeModule(std::move(M), Ctx));
   }
 
