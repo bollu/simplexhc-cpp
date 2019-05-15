@@ -6,12 +6,12 @@ binding factorial = \(a : PrimInt) -> PrimInt {
     case a () of
         0 -> 1;
         x -> case primSubtract (x 1) of
-                xmin1 -> case primSubtract (xmin1 100) of
+                xmin1 -> case factorial (xmin1) of
                                 factxmin1 -> primMult (x factxmin1);;;
 };
 
 
 binding main = \() -> Boxed { 
-    case  factorial (20) of
+    case  factorial (5) of
             x -> printInt (x);
 };
